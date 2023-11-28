@@ -1,0 +1,54 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <xcb/xcb.h>
+#include <xcb/composite.h>
+
+const char *programName = "mycompositor";
+
+int main(void){
+	xcb_connection_t *conn = xcb_connect(NULL, NULL);
+	xcb_screen_t *screen;
+	xcb_composite_query_version_reply_t *comp_reply;
+	xcb_generic_error_t *error;
+	xcb_window_t compositor_window;
+	if(xcb_connection_has_error(conn)){
+		fprintf(stderr, "Error: Unable to connect to X server\n");
+		return 1;
+	}
+	screen = xcb_setup_roots_iterator(xcb_get_setup(conn)).data;
+	comp_reply = xcb_composite_query_version_reply(conn, xcb_composite_query_version(conn, XCB_COMPOSITE_MAJOR_VERSION, XCB_COMPOSITE_MINOR_VERSION), &error);
+	if(error){
+		fprintf(stderr, "Error: Composite extension not available\n");
+		free(error);
+		return 1;
+	}
+	free(comp_reply);
+	compositor_window = xcb_generate_id(conn);
+
+
+
+	{
+		uint32_t a = XCB_EVENT_MASK_EXPOSURE;
+		xcb_create_window(conn, 32, compositor_window, screen->root, 0, 0, screen->width_in_pixels, screen->height_in_pixels, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual, XCB_CW_EVENT_MASK, &a);
+	}
+
+
+
+	xcb_map_window(conn, compositor_window);
+	xcb_composite_redirect_window(conn, compositor_window, XCB_COMPOSITE_REDIRECT_MANUAL);
+	xcb_atom_t property = xcb_generate_id(conn);
+	xcb_atom_t type = XCB_ATOM_CARDINAL;
+	uint32_t value = 0;
+	xcb_change_property(conn, XCB_PROP_MODE_REPLACE, compositor_window, property, type, 32, 1, &value);
+	xcb_generic_event_t *event;
+	xcb_flush(conn);
+	while((event = xcb_wait_for_event(conn))){
+		switch(event->response_type & ~0x80){
+			case XCB_EXPOSE:
+				break;
+		}
+		free(event);
+	}
+	xcb_disconnect(conn);
+	return 0;
+}
