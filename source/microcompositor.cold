@@ -1,54 +1,818 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <xcb/xcb.h>
-#include <xcb/composite.h>
+/*!
+	introduce multithreading maybe
+*/
 
-const char *programName = "mycompositor";
+/*!
+	monitor changes to overlay window
+*/
 
-int main(void){
-	xcb_connection_t *conn = xcb_connect(NULL, NULL);
-	xcb_screen_t *screen;
-	xcb_composite_query_version_reply_t *comp_reply;
-	xcb_generic_error_t *error;
-	xcb_window_t compositor_window;
-	if(xcb_connection_has_error(conn)){
-		fprintf(stderr, "Error: Unable to connect to X server\n");
-		return 1;
+/*!
+	introduce secondary client array for windows we are actually currently interested in
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*! microcompositor.cold
+
+MIT License
+
+Copyright (C) 2023 Stefanos "Steven" Tsakiris
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE. */
+
+/*!includes:{*/
+	#include <stdint.h>
+	#include "cold/cold.hold"
+	#include <signal.h>
+	#include <stdio.h>
+	#include <stdlib.h>
+	#include <string.h>
+	#include <unistd.h>
+	#include <xcb/randr.h>
+	#include <xcb/xcb.h>
+	#include <xcb/composite.h>
+/*!}*/
+
+/*!user_defines:{*/
+	#define DefaultErrorStream /*---------*/ (stderr)
+/*!}*/
+
+/*!defines:{*/
+	#define DEBUG /*----------------------*/ (true)
+
+	#define _EMPTY_MACRO /*---------------*/
+
+	#if DEBUG
+		#define _PRINTEVENT_DEC /*-------------*/ local void printEvent(void)
+		#define _PRINTUNEXPECTEDEVENT_DEC /*---*/ local void printUnexpectedEvent(void)
+		#define _printEvent(void) /*-----------*/ (printEvent())
+		#define _printUnexpectedEvent(void) /*-*/ (printUnexpectedEvent())
+	#else
+		#define _PRINTEVENT_DEC /*-------------*/ def void dA
+		#define _PRINTUNEXPECTEDEVENT_DEC /*---*/ def void a2
+		#define _printEvent(void) /*-----------*/ _EMPTY_MACRO
+		#define _printUnexpectedEvent(void) /*-*/ _EMPTY_MACRO
+	#endif
+
+	#define PRINTERROR_DEC /*-------------*/ local void printError(const char *const string)
+	#define OPENERRORSTREAM_DEC /*--------*/ local bool openErrorStream(void)
+	#define CLOSEERRORSTREAM_DEC /*-------*/ local void closeErrorStream(void)
+	#define PRINTCONNECTIONERROR_DEC /*---*/ local void printConnectionError(void)
+	#define PRINTEVENT_DEC /*-------------*/ _PRINTEVENT_DEC
+	#define PRINTXCBERROR_DEC /*----------*/ local void printXCBError(void)
+	#define PRINTUNEXPECTEDEVENT_DEC /*---*/ _PRINTUNEXPECTEDEVENT_DEC
+
+	#define printEvent(void) /*-----------*/ _printEvent()
+	#define printUnexpectedEvent(void) /*-*/ _printUnexpectedEvent()
+/*!}*/
+
+/*!globals:{*/
+	#define xScreen /*-------*/ xcb_screen_t
+	#define xConnection /*---*/ xcb_connection_t
+	#define xGenericError /*-*/ xcb_generic_error_t
+	#define xVisual /*-------*/ xcb_visualid_t
+	#define xDepth /*--------*/ uint8
+	#define xGenericEvent /*-*/ xcb_generic_event_t
+	const char * /*----*/ programName;
+	const char * /*----*/ errorPath;
+	const char * /*----*/ connectionName;
+	const xScreen * /*-*/ screen;
+	const char * /*----*/ quitMessage;
+	bool /*------------*/ mustOpenErrorStream;
+	FILE * /*----------*/ errorStream;
+	xConnection * /*---*/ connection;
+	xGenericError * /*-*/ genericError;
+	xGenericEvent * /*-*/ event;
+	void * /*----------*/ agp0;
+	uint32 /*----------*/ foreground;
+	uint32 /*----------*/ background;
+	xVisual /*---------*/ visual;
+	xDepth /*----------*/ depth;
+	#undef  xGenericEvent
+	#undef  xGenericError
+	#undef  xConnection
+	#undef  xScreen
+/*!}*/
+
+/*!functions:{*/
+	PRINTERROR_DEC;
+	OPENERRORSTREAM_DEC;
+	CLOSEERRORSTREAM_DEC;
+	PRINTCONNECTIONERROR_DEC;
+	PRINTEVENT_DEC;
+	PRINTXCBERROR_DEC;
+	PRINTUNEXPECTEDEVENT_DEC;
+/*!}*/
+
+#define CLIENT_BLOCK_SIZE /*-*/ (25)
+
+def struct{
+	xcb_window_t /*--------*/ window;
+	int32 /*---------------*/ x;
+	int32 /*---------------*/ y;
+	int32 /*---------------*/ width;
+	int32 /*---------------*/ height;
+	bool /*----------------*/ mapped;
+} Client;
+
+Client *clientStart;
+uint clientSize = CLIENT_BLOCK_SIZE;
+uint clientAllocated = 0;
+xcb_pixmap_t wallpaperPixmap;
+
+xcb_get_geometry_reply_t *reply;
+uint width;
+uint height;
+uint32 *data;
+xcb_gcontext_t overlaygc;
+xcb_window_t overlayWindow;
+
+xcb_get_image_cookie_t *frameCookieStart;
+
+int64 minClock = 100000;
+int64 maxClock = 0;
+
+int main(const int argumentAmount, const char *const *argument){
+	(void)argumentAmount;
+	jmp main;
+	main:{
+		foreground = 0xFFE5E5E3;
+		background = 0xFF292929;
+		jmp setPrimaryGlobals;
 	}
-	screen = xcb_setup_roots_iterator(xcb_get_setup(conn)).data;
-	comp_reply = xcb_composite_query_version_reply(conn, xcb_composite_query_version(conn, XCB_COMPOSITE_MAJOR_VERSION, XCB_COMPOSITE_MINOR_VERSION), &error);
-	if(error){
-		fprintf(stderr, "Error: Composite extension not available\n");
-		free(error);
-		return 1;
+	setPrimaryGlobals:{
+		programName /*---------*/ = *argument;
+		errorPath /*-----------*/ = NULL;
+		connectionName /*------*/ = NULL;
+		mustOpenErrorStream /*-*/ = false;
+		errorStream /*---------*/ = DefaultErrorStream;
+		connection /*----------*/ = NULL;
+		genericError /*--------*/ = NULL;
+		event /*---------------*/ = NULL;
+		agp0 /*----------------*/ = NULL;
+		quitMessage /*---------*/ = NULL;
+
+
+
+		/*! update this later, i am bored */
+
+
+
+		clientStart = malloc(clientSize * sizeof(Client));
+		frameCookieStart = malloc(100 * sizeof(xcb_get_image_cookie_t));
+
+
+
+		jmp establishServerConnection;
 	}
-	free(comp_reply);
-	compositor_window = xcb_generate_id(conn);
+	establishServerConnection:{
+		#define ESTABLISHSERVERCONNECTION_CONNECTION /*-----*/ connection
+		#define ESTABLISHSERVERCONNECTION_CONNECTIONNAME /*-*/ connectionName
+		#define ESTABLISHSERVERCONNECTION_SCREEN /*---------*/ screen
+		#include "xcb/establishServerConnection.hold"
+		switch xcb_connection_has_error(connection) over
+			to XCB_NONE: /*------------*/ /*-----------------------------------------------------------------*/ jmp generateIDs;
+			to XCB_CONN_CLOSED_PARSE_ERR: printError(connectionName? "invalid server name" : "no server name"); jmp mainEmergencyExit;
+			off: /*--------------------*/ printConnectionError(); /*-----------------------------------------*/ jmp mainEmergencyExit;
+		end
+	}
+	generateIDs:{
+		jmp setupScreenProfile;
+	}
+	setupScreenProfile:{
+		#define SETUPSCREENPROFILE_VISUAL /*-*/ visual
+		#define SETUPSCREENPROFILE_DEPTH /*--*/ depth
+		#include "xcb/setupScreenProfile.hold"
+	}
+	{
+		xcb_composite_get_overlay_window_reply_t *overlay = xcb_composite_get_overlay_window_reply(connection, xcb_composite_get_overlay_window(connection, (*screen).root), NULL);
+		if(overlay){
+			overlayWindow = (*overlay).overlay_win;
+			free(overlay);
+		}
+	}
+	{
+		const uint32 valueList = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE;
+		xcb_change_window_attributes(connection, (*screen).root, XCB_CW_EVENT_MASK, &valueList);
+	}
+
+
+
+	xcb_composite_redirect_subwindows(connection, (*screen).root, XCB_COMPOSITE_REDIRECT_MANUAL);
+
+
+
+
+
+
 
 
 
 	{
-		uint32_t a = XCB_EVENT_MASK_EXPOSURE;
-		xcb_create_window(conn, 32, compositor_window, screen->root, 0, 0, screen->width_in_pixels, screen->height_in_pixels, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual, XCB_CW_EVENT_MASK, &a);
-	}
+		xcb_query_tree_reply_t *const reply = xcb_query_tree_reply(connection, xcb_query_tree(connection, (*screen).root), NULL);
+		if(reply){
+			const uint amount = xcb_query_tree_children_length(reply);
+			const xcb_window_t *const windowStart = xcb_query_tree_children(reply);
+			const xcb_window_t *windowCurrent = windowStart;
+			const xcb_window_t *const windowWall = windowStart + amount;
+			Client *clientCurrent = clientStart;
+			xcb_get_geometry_cookie_t *const responseStart = malloc(amount * sizeof(xcb_get_geometry_cookie_t));
+			xcb_get_window_attributes_cookie_t *const response1Start = malloc(amount * sizeof(xcb_get_window_attributes_cookie_t));
+			xcb_get_geometry_cookie_t *responseCurrent = responseStart;
+			xcb_get_window_attributes_cookie_t *response1Current = response1Start;
+			xcb_get_geometry_cookie_t *responseWall;
+			jmp getWindowAttributesLoop;
+			getWindowAttributesLoop:{
+				xcb_get_window_attributes_reply_t *const reply1 = xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, *windowCurrent), NULL);
+				if(reply1){
+					if((*reply1)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
+						if(clientAllocated == clientSize){
+							void *temp;
+							clientSize += CLIENT_BLOCK_SIZE;
+							if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
+								exit(1);
+							}
+							clientStart = temp;
+							clientCurrent = clientStart + clientAllocated;
+						}
+						(*clientCurrent).window = *windowCurrent;
 
 
 
-	xcb_map_window(conn, compositor_window);
-	xcb_composite_redirect_window(conn, compositor_window, XCB_COMPOSITE_REDIRECT_MANUAL);
-	xcb_atom_t property = xcb_generate_id(conn);
-	xcb_atom_t type = XCB_ATOM_CARDINAL;
-	uint32_t value = 0;
-	xcb_change_property(conn, XCB_PROP_MODE_REPLACE, compositor_window, property, type, 32, 1, &value);
-	xcb_generic_event_t *event;
-	xcb_flush(conn);
-	while((event = xcb_wait_for_event(conn))){
-		switch(event->response_type & ~0x80){
-			case XCB_EXPOSE:
-				break;
+						*responseCurrent = xcb_get_geometry(connection, *windowCurrent);
+						*response1Current = xcb_get_window_attributes(connection, *windowCurrent);
+
+
+
+						{
+							const uint32 valueList = XCB_EVENT_MASK_VISIBILITY_CHANGE;
+							xcb_change_window_attributes(connection, *windowCurrent, XCB_CW_EVENT_MASK, &valueList);
+						}
+
+
+
+						inc responseCurrent;
+						inc response1Current;
+						inc clientCurrent;
+						inc clientAllocated;
+					}
+					free(reply1);
+				}
+				if(inc windowCurrent < windowWall){
+					jmp getWindowAttributesLoop;
+				}
+				clientCurrent = clientStart;
+				responseWall = responseCurrent;
+				responseCurrent = responseStart;
+				response1Current = response1Start;
+				jmp getGeometryReplyLoop;
+			}
+			getGeometryReplyLoop:{
+				xcb_get_geometry_reply_t *const reply1 = xcb_get_geometry_reply(connection, *responseCurrent, NULL);
+				xcb_get_window_attributes_reply_t *const reply2 = xcb_get_window_attributes_reply(connection, *response1Current, NULL);
+				if(reply1){
+					(*clientCurrent).x = (*reply1).x;
+					(*clientCurrent).y = (*reply1).y;
+					(*clientCurrent).width = (*reply1).width;
+					(*clientCurrent).height = (*reply1).height;
+					free(reply1);
+				}else{
+					(*clientCurrent).x = 0;
+					(*clientCurrent).y = 0;
+					(*clientCurrent).width = 0;
+					(*clientCurrent).height = 0;
+				}
+				if(reply2){
+					(*clientCurrent).mapped = (*reply2).map_state == XCB_MAP_STATE_VIEWABLE? true : false;
+					free(reply2);
+				}else{
+					(*clientCurrent).mapped = false;
+				}
+				if(inc responseCurrent < responseWall){
+					inc response1Current;
+					inc clientCurrent;
+					jmp getGeometryReplyLoop;
+				}
+			}
+			free(responseStart);
+			free(reply);
 		}
-		free(event);
 	}
-	xcb_disconnect(conn);
-	return 0;
+
+
+
+
+
+
+
+
+
+	{
+		xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(connection, xcb_intern_atom(connection, false, strlen("_XROOTPMAP_ID"), "_XROOTPMAP_ID"), NULL);
+		xcb_get_property_reply_t *reply1;
+		xcb_atom_t atom = (*reply).atom;
+		free(reply);
+		if((reply1 = xcb_get_property_reply(connection, xcb_get_property(connection, false, (*screen).root, atom, XCB_ATOM_PIXMAP, 0, 1), NULL))){
+			wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply1);
+			if(!wallpaperPixmap){
+				fprintf(stdout, "pixmap not set\n");
+			}
+			free(reply1);
+		}
+	}
+
+
+
+
+
+
+
+
+
+	{
+		reply = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, overlayWindow), NULL);
+		overlaygc = xcb_generate_id(connection);
+		if(reply){
+			width = (*reply).width;
+			height = (*reply).height;
+			free(reply);
+		}else{
+			width = 2 * 1920;
+			height = 1080;
+		}
+		data = malloc(width * height * sizeof(uint32));
+		xcb_create_gc(connection, overlaygc, (*screen).root, XCB_NONE, NULL);
+	}
+
+
+
+	{
+		const uint32 stackMode = XCB_STACK_MODE_BELOW;
+		xcb_configure_window(connection, overlayWindow, XCB_CONFIG_WINDOW_STACK_MODE, &stackMode);
+	}
+
+
+
+
+
+
+
+
+
+	eventLoop:{
+		xcb_flush(connection);
+		free(event);
+		event = NULL;
+		jmp waitForEventLoop;
+	}
+	waitForEventLoop:{
+		if((event = xcb_poll_for_event(connection))){
+			jmp switchEvents;
+		}
+		if(xcb_connection_has_error(connection)){
+			printConnectionError();
+			jmp eventLoopExit;
+		}
+		jmp printFrame;
+	}
+	switchEvents:{
+		#undef  XCB_RANDR_SCREEN_CHANGE_NOTIFY
+		#define XCB_ONE /*------------------------*/ (1)
+		#define XCB_RANDR_SCREEN_CHANGE_NOTIFY /*-*/ (89)
+		printEvent();
+		switch (*event).response_type & ~0x80 over
+			to XCB_NONE: /*-----------------------*/ jmp errorEvent;
+			to XCB_ONE: /*------------------------*/ jmp unexpectedEvent;
+			to XCB_KEY_PRESS: /*------------------*/ jmp unexpectedEvent;
+			to XCB_KEY_RELEASE: /*----------------*/ jmp unexpectedEvent;
+			to XCB_BUTTON_PRESS: /*---------------*/ jmp unexpectedEvent;
+			to XCB_BUTTON_RELEASE: /*-------------*/ jmp unexpectedEvent;
+			to XCB_MOTION_NOTIFY: /*--------------*/ jmp unexpectedEvent;
+			to XCB_ENTER_NOTIFY: /*---------------*/ jmp unexpectedEvent;
+			to XCB_LEAVE_NOTIFY: /*---------------*/ jmp unexpectedEvent;
+			to XCB_FOCUS_IN: /*-------------------*/ jmp unexpectedEvent;
+			to XCB_FOCUS_OUT: /*------------------*/ jmp unexpectedEvent;
+			to XCB_KEYMAP_NOTIFY: /*--------------*/ jmp unexpectedEvent;
+			to XCB_EXPOSE: /*---------------------*/ jmp unexpectedEvent;
+			to XCB_GRAPHICS_EXPOSURE: /*----------*/ jmp unexpectedEvent;
+			to XCB_NO_EXPOSURE: /*----------------*/ jmp unexpectedEvent;
+			to XCB_VISIBILITY_NOTIFY: /*----------*/ jmp visibilityNotifyEvent;
+			to XCB_CREATE_NOTIFY: /*--------------*/ jmp createNotifyEvent;
+			to XCB_DESTROY_NOTIFY: /*-------------*/ jmp destroyNotifyEvent;
+			to XCB_UNMAP_NOTIFY: /*---------------*/ jmp unmapNotifyEvent;
+			to XCB_MAP_NOTIFY: /*-----------------*/ jmp mapNotifyEvent;
+			to XCB_MAP_REQUEST: /*----------------*/ jmp unexpectedEvent;
+			to XCB_REPARENT_NOTIFY: /*------------*/ jmp reparentNotifyEvent;
+			to XCB_CONFIGURE_NOTIFY: /*-----------*/ jmp configureNotifyEvent;
+			to XCB_CONFIGURE_REQUEST: /*----------*/ jmp unexpectedEvent;
+			to XCB_GRAVITY_NOTIFY: /*-------------*/ jmp unexpectedEvent;
+			to XCB_RESIZE_REQUEST: /*-------------*/ jmp unexpectedEvent;
+			to XCB_CIRCULATE_NOTIFY: /*-----------*/ jmp unexpectedEvent;
+			to XCB_CIRCULATE_REQUEST: /*----------*/ jmp unexpectedEvent;
+			to XCB_PROPERTY_NOTIFY: /*------------*/ jmp propertyNotifyEvent;
+			to XCB_SELECTION_CLEAR: /*------------*/ jmp unexpectedEvent;
+			to XCB_SELECTION_REQUEST: /*----------*/ jmp unexpectedEvent;
+			to XCB_SELECTION_NOTIFY: /*-----------*/ jmp unexpectedEvent;
+			to XCB_COLORMAP_NOTIFY: /*------------*/ jmp unexpectedEvent;
+			to XCB_CLIENT_MESSAGE: /*-------------*/ jmp unexpectedEvent;
+			to XCB_MAPPING_NOTIFY: /*-------------*/ jmp eventLoop;
+			to XCB_GE_GENERIC: /*-----------------*/ jmp unexpectedEvent;
+			to XCB_RANDR_SCREEN_CHANGE_NOTIFY: /*-*/ jmp unexpectedEvent;
+			off: /*-------------------------------*/ jmp unexpectedEvent;
+		end
+		#undef  XCB_RANDR_SCREEN_CHANGE_NOTIFY
+		#undef  XCB_ONE
+	}
+	visibilityNotifyEvent:{
+
+
+
+		const xcb_window_t window = (*(xcb_visibility_notify_event_t *)event).window;
+		const Client *const listWall = clientStart + clientAllocated;
+		Client *listCurrent = clientStart;
+		findObscuredWindowLoop:{
+			if((*listCurrent).window == window){
+				if((*(xcb_visibility_notify_event_t *)event).state == XCB_VISIBILITY_FULLY_OBSCURED){
+					(*listCurrent).mapped = false;
+					jmp eventLoop;
+				}
+				(*listCurrent).mapped = true;
+				jmp eventLoop;
+			}
+			if(inc listCurrent < listWall){
+				jmp findObscuredWindowLoop;
+			}
+		}
+
+
+
+		jmp eventLoop;
+	}
+	createNotifyEvent:{
+
+
+
+		const xcb_window_t window = (*(xcb_create_notify_event_t *)event).window;
+		xcb_get_window_attributes_reply_t *const reply = xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, window), NULL);
+		if(reply){
+			if((*reply)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
+				if(clientAllocated == clientSize){
+					void *temp;
+					clientSize += CLIENT_BLOCK_SIZE;
+					if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
+						exit(1);
+					}
+					clientStart = temp;
+				}
+				{
+					xcb_get_geometry_reply_t *const reply1 = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, window), NULL);
+					Client *const clientCurrent = clientStart + clientAllocated;
+					(*clientCurrent).window = window;
+					if(reply1){
+						(*clientCurrent).x = (*reply1).x;
+						(*clientCurrent).y = (*reply1).y;
+						(*clientCurrent).width = (*reply1).width;
+						(*clientCurrent).height = (*reply1).height;
+						free(reply1);
+					}else{
+						(*clientCurrent).x = 0;
+						(*clientCurrent).y = 0;
+						(*clientCurrent).width = 0;
+						(*clientCurrent).height = 0;
+					}
+				}
+				inc clientAllocated;
+			}
+			free(reply);
+		}
+
+
+
+		jmp eventLoop;
+	}
+	destroyNotifyEvent:{
+
+
+
+		const xcb_window_t window = (*(xcb_destroy_notify_event_t *)event).window;
+		const Client *const listWall = clientStart + clientAllocated;
+		Client *listCurrent = clientStart;
+		findDestroyedWindowLoop:{
+			if((*listCurrent).window == window){
+				(*listCurrent).window = (*(clientStart + clientAllocated - 1)).window;
+				dec clientAllocated;
+				jmp eventLoop;
+			}
+			if(inc listCurrent < listWall){
+				jmp findDestroyedWindowLoop;
+			}
+		}
+
+
+
+		jmp eventLoop;
+	}
+	unmapNotifyEvent:{
+
+
+
+		const xcb_window_t window = (*(xcb_unmap_notify_event_t *)event).window;
+		const Client *const listWall = clientStart + clientAllocated;
+		Client *listCurrent = clientStart;
+		findUnmappedWindowLoop:{
+			if((*listCurrent).window == window){
+				(*listCurrent).mapped = false;
+				jmp eventLoop;
+			}
+			if(inc listCurrent < listWall){
+				jmp findUnmappedWindowLoop;
+			}
+		}
+
+
+
+		jmp eventLoop;
+	}
+	mapNotifyEvent:{
+
+
+
+		const xcb_window_t window = (*(xcb_unmap_notify_event_t *)event).window;
+		const Client *const listWall = clientStart + clientAllocated;
+		Client *listCurrent = clientStart;
+		findMappedWindowLoop:{
+			if((*listCurrent).window == window){
+				(*listCurrent).mapped = true;
+				jmp eventLoop;
+			}
+			if(inc listCurrent < listWall){
+				jmp findMappedWindowLoop;
+			}
+		}
+
+
+
+		jmp eventLoop;
+	}
+	reparentNotifyEvent:{
+		if((*(xcb_reparent_notify_event_t *)event).parent == (*screen).root){
+			jmp createNotifyEvent;
+		}
+		jmp destroyNotifyEvent;
+	}
+	configureNotifyEvent:{
+
+
+
+		/*!*/
+
+
+
+		jmp eventLoop;
+	}
+	propertyNotifyEvent:{
+
+
+
+		/*!*/
+
+
+
+		jmp eventLoop;
+	}
+	errorEvent:{
+		genericError = (void *)event;
+		printXCBError();
+		genericError = NULL;
+		jmp eventLoop;
+	}
+	unexpectedEvent:{
+		printUnexpectedEvent();
+		jmp eventLoop;
+	}
+	printFrame:{
+		clock_t t = clock();
+		Client *clientCurrent = clientStart;
+		Client *clientWall = clientStart + clientAllocated;
+		xcb_get_image_cookie_t *frameCookieCurrent = frameCookieStart;
+		{
+			xcb_get_image_reply_t *const reply = xcb_get_image_reply(connection, xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, wallpaperPixmap, 0, 0, width, height, -1), NULL);
+			if(reply){
+				const uint32 *const destinationWall = data + width * height;
+				const uint32 *sourceData = (void *)xcb_get_image_data(reply);
+				uint32 *destinationCurrent = data;
+				printWallpaperLoop:{
+					if(destinationCurrent < destinationWall){
+						*destinationCurrent = *sourceData;
+						inc sourceData;
+						inc destinationCurrent;
+						jmp printWallpaperLoop;
+					}
+				}
+				free(reply);
+			}
+		}
+		getImageCookieLoop:{
+			if((*clientCurrent).mapped){
+				*frameCookieCurrent = xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, (*clientCurrent).window, 0, 0, (*clientCurrent).width, (*clientCurrent).height, -1);
+				inc frameCookieCurrent;
+			}
+			if(inc clientCurrent < clientWall){
+				jmp getImageCookieLoop;
+			}
+			clientCurrent = clientStart;
+			frameCookieCurrent = frameCookieStart;
+		}
+		drawWindowsLoop:{
+			if((*clientCurrent).mapped){
+				xcb_get_image_reply_t *const reply = xcb_get_image_reply(connection, *frameCookieCurrent, NULL);
+				if(reply){
+					uint32 *sourceData = (void *)xcb_get_image_data(reply);
+					uint32 *destinationData = data + (*clientCurrent).y * width + (*clientCurrent).x;
+					int x;
+					int y;
+					int clientWidth = (*clientCurrent).width;
+					int clientHeight = (*clientCurrent).height;
+					switch (*reply).depth over
+						to 24:{
+							uint32 *dStart = destinationData;
+							uint32 *sStart = sourceData;
+							for(y = 0; y < clientHeight; inc y){
+								uint32 *dd = dStart;
+								uint32 *sd = sStart;
+								if((uint)((*clientCurrent).y + y) >= height){
+									brk;
+								}
+								for(x = 0; x < clientWidth; inc x){
+									if((uint)((*clientCurrent).x + x) >= width){
+										brk;
+									}
+									*dd = *sd;
+									inc dd;
+									inc sd;
+								}
+								dStart += width;
+								sStart += clientWidth;
+							}
+							brk;
+						}
+						to 32:{
+							uint32 *dStart = destinationData;
+							uint32 *sStart = sourceData;
+							for(y = 0; y < clientHeight; inc y){
+								uint32 *dd = dStart;
+								uint32 *sd = sStart;
+								if((uint)((*clientCurrent).y + y) >= height){
+									brk;
+								}
+								for(x = 0; x < clientWidth; inc x){
+									if((uint)((*clientCurrent).x + x) >= width){
+										brk;
+									}
+									if(*sd & 0xFF000000){
+										*dd = *sd;
+									}
+									inc dd;
+									inc sd;
+								}
+								dStart += width;
+								sStart += clientWidth;
+							}
+							brk;
+						}
+						off:{
+							brk;
+						}
+					end
+					free(reply);
+				}
+				inc frameCookieCurrent;
+			}
+			if(inc clientCurrent < clientWall){
+				jmp drawWindowsLoop;
+			}
+		}
+		xcb_put_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, overlayWindow, overlaygc, width, height, 0, 0, 0, 24, width * height * sizeof(uint32), (void *)data);
+		xcb_flush(connection);
+		free(event);
+
+
+
+		t = clock() - t;
+		if(t < minClock){
+			minClock = t;
+		}
+		if(t > maxClock){
+			maxClock = t;
+		}
+		printf("took %lu            min %lu            max %lu\n", t, minClock, maxClock);
+
+
+
+		jmp waitForEventLoop;
+	}
+	eventLoopExit:{
+		free(event);
+		event = NULL;
+		jmp mainEmergencyExit;
+	}
+	mainEmergencyExit:{
+		xcb_disconnect(connection);
+		connection = NULL;
+		ret 0;
+	}
 }
+PRINTERROR_DEC{
+	if(openErrorStream()){
+		fprintf(errorStream, "%s: %s\n", programName, string);
+		closeErrorStream();
+	}
+	ret;
+}
+OPENERRORSTREAM_DEC{
+	ret !mustOpenErrorStream or (errorStream = fopen(errorPath, "a"));
+}
+CLOSEERRORSTREAM_DEC{
+	if(mustOpenErrorStream and errorStream){
+		fclose(errorStream);
+		errorStream = NULL;
+	}
+	ret;
+}
+PRINTCONNECTIONERROR_DEC{
+	if(openErrorStream()){
+		#define PRINTCONNECTIONERROR_ERROR /*--*/ xcb_connection_has_error(connection)
+		#define PRINTCONNECTIONERROR_STREAM /*-*/ errorStream
+		#include "xcb/printConnectionError.hold"
+		closeErrorStream();
+	}
+	ret;
+}
+#if DEBUG
+PRINTEVENT_DEC{
+	#define PRINTEVENT_EVENT /*--*/ event
+	#define PRINTEVENT_STREAM /*-*/ stdout
+	#include "xcb/printEvent.hold"
+	ret;
+}
+#endif
+PRINTXCBERROR_DEC{
+	if(openErrorStream()){
+		#define PRINTXCBERROR_ERROR /*--*/ genericError
+		#define PRINTXCBERROR_STREAM /*-*/ errorStream
+		#include "xcb/printXCBError.hold"
+		closeErrorStream();
+	}
+	ret;
+}
+#if DEBUG
+PRINTUNEXPECTEDEVENT_DEC{
+	if(openErrorStream()){
+		#define PRINTUNEXPECTEDEVENT_EVENT /*--*/ event
+		#define PRINTUNEXPECTEDEVENT_STREAM /*-*/ errorStream
+		#include "xcb/printUnexpectedEvent.hold"
+		closeErrorStream();
+	}
+	ret;
+}
+#endif
