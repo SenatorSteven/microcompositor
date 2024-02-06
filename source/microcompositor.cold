@@ -1,13 +1,21 @@
 /*!
-	introduce multithreading maybe
+	consider introducing multithreading if the need arises
 */
 
 /*!
-	monitor changes to overlay window
+	monitor changes to overlay window, correct them if need be and adjust to permanent changes
 */
 
 /*!
-	introduce secondary client array for windows we are actually currently interested in
+	update z-order code in events (many) code
+*/
+
+/*!
+	use the mapped and normal list index numbers to instantly traverse the lists when needing to change them
+*/
+
+/*!
+	write down how to deal with the final frame drawing + which windows to draw
 */
 
 
@@ -62,7 +70,6 @@ SOFTWARE. */
 
 /*!includes:{*/
 	#include <stdint.h>
-	#include "cold/cold.hold"
 	#include <signal.h>
 	#include <stdio.h>
 	#include <stdlib.h>
@@ -70,7 +77,9 @@ SOFTWARE. */
 	#include <unistd.h>
 	#include <xcb/randr.h>
 	#include <xcb/xcb.h>
+	#include <xcb/xcbext.h>
 	#include <xcb/composite.h>
+	#include "cold/cold.hold"
 /*!}*/
 
 /*!user_defines:{*/
@@ -104,6 +113,8 @@ SOFTWARE. */
 
 	#define printEvent(void) /*-----------*/ _printEvent()
 	#define printUnexpectedEvent(void) /*-*/ _printUnexpectedEvent()
+
+	#define xcb_wait_for_reply(a, b, c) /*-*/ (xcb_wait_for_reply(a, (b).sequence, c))
 /*!}*/
 
 /*!globals:{*/
@@ -144,20 +155,45 @@ SOFTWARE. */
 	PRINTUNEXPECTEDEVENT_DEC;
 /*!}*/
 
-#define CLIENT_BLOCK_SIZE /*-*/ (25)
+#define CLIENT_BLOCK_SIZE /*--------*/ (25)
+#define MAPPED_CLIENT_BLOCK_SIZE /*-*/ (10)
 
 def struct{
 	xcb_window_t /*--------*/ window;
+
 	int32 /*---------------*/ x;
 	int32 /*---------------*/ y;
 	int32 /*---------------*/ width;
 	int32 /*---------------*/ height;
+
+#ifdef a
+	int32 /*---------------*/ viewableX;
+	int32 /*---------------*/ viewableY;
+	int32 /*---------------*/ viewableWidth;
+	int32 /*---------------*/ viewableHeight;
+#endif
+
+	uint16 /*--------------*/ listIndex;
+	uint16 /*--------------*/ mappedListIndex;
+
 	bool /*----------------*/ mapped;
 } Client;
+
+def struct{
+	uint16 /*--------------*/ x;
+	uint16 /*--------------*/ y;
+	uint16 /*--------------*/ w;
+	uint16 /*--------------*/ h;
+} Monitor;
 
 Client *clientStart;
 uint clientSize = CLIENT_BLOCK_SIZE;
 uint clientAllocated = 0;
+
+Client **mappedClientStart;
+uint mappedClientSize = MAPPED_CLIENT_BLOCK_SIZE;
+uint mappedClientAllocated = 0;
+
 xcb_pixmap_t wallpaperPixmap;
 
 xcb_get_geometry_reply_t *reply;
@@ -171,6 +207,18 @@ xcb_get_image_cookie_t *frameCookieStart;
 
 int64 minClock = 100000;
 int64 maxClock = 0;
+int64 avgClock = 0;
+uint avgClockCounter = 0;
+
+uint monitorAmount;
+
+void *monitorData;
+Monitor *monitorStart;
+Monitor *monitorWall;
+
+uint16 *overlayWindowTruthTableStart;
+
+uint16 pixelsToDraw;
 
 int main(const int argumentAmount, const char *const *argument){
 	(void)argumentAmount;
@@ -199,6 +247,7 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 		clientStart = malloc(clientSize * sizeof(Client));
+		mappedClientStart = malloc(clientSize * sizeof(Client *));
 		frameCookieStart = malloc(100 * sizeof(xcb_get_image_cookie_t));
 
 
@@ -248,6 +297,119 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 
+	jmp storeMonitors;
+	storeMonitors:{
+		void *reply;
+		Monitor *monitorCurrent;
+		xcb_randr_monitor_info_iterator_t iterator;
+		if(!(reply = xcb_wait_for_reply(connection, xcb_randr_get_monitors(connection, (*screen).root, true), NULL))){
+			monitorAmount = 1;
+			jmp calculateOverlayWindowBooleanValues;
+		}
+		monitorAmount = (*(xcb_randr_get_monitors_reply_t *)reply).nMonitors;
+		if(!(monitorData = malloc(monitorAmount * sizeof(Monitor)))){
+			free(reply);
+			jmp calculateOverlayWindowBooleanValues;
+		}
+		iterator = xcb_randr_get_monitors_monitors_iterator(reply);
+		monitorStart = monitorData;
+		monitorCurrent = monitorStart;
+		monitorWall = monitorStart + monitorAmount;
+		storeMonitorLoop:{
+			if(monitorCurrent < monitorWall){
+				const xcb_randr_monitor_info_t *const data = iterator.data;
+				const uint x = (*data).x;
+				const uint y = (*data).y;
+				const uint w = (*data).width;
+				const uint h = (*data).height;
+				if(monitorCurrent > monitorStart){
+					const Monitor *const wall = monitorCurrent;
+					const Monitor *current = monitorStart;
+					removeSameMonitorLoop:{
+						if(current < wall){
+							if((*current).x == x and (*current).y == y and (*current).w == w and (*current).h == h){
+								dec monitorAmount;
+								dec monitorWall;
+								xcb_randr_monitor_info_next(&iterator);
+								jmp storeMonitorLoop;
+							}
+							inc current;
+							jmp removeSameMonitorLoop;
+						}
+					}
+				}
+				(*monitorCurrent).x = x;
+				(*monitorCurrent).y = y;
+				(*monitorCurrent).w = w;
+				(*monitorCurrent).h = h;
+				xcb_randr_monitor_info_next(&iterator);
+				inc monitorCurrent;
+				jmp storeMonitorLoop;
+			}
+			jmp trimMonitorMemory;
+		}
+		trimMonitorMemory:{
+			void *temp;
+			if(!(temp = realloc(monitorData, monitorAmount * sizeof(Monitor)))){
+				free(reply);
+				jmp calculateOverlayWindowBooleanValues;
+			}
+			monitorData = temp;
+		}
+		monitorStart = monitorData;
+		monitorWall = monitorStart + monitorAmount;
+		free(reply);
+		jmp calculateOverlayWindowBooleanValues;
+	}
+	calculateOverlayWindowBooleanValues:{
+		uint i = 0;
+		uint pixelTotal = 0;
+		while(i < monitorAmount){
+			pixelTotal += (*(monitorStart + i)).w * (*(monitorStart + i)).h;
+			inc i;
+		}
+		overlayWindowTruthTableStart = malloc((*screen).width_in_pixels * (*screen).height_in_pixels * sizeof(uint16));
+
+		pixelsToDraw = (*screen).width_in_pixels * (*screen).height_in_pixels;
+
+		if(pixelTotal < (*screen).width_in_pixels * (*screen).height_in_pixels){
+
+
+
+			/*! what happens when monitors overlap? */
+
+
+
+			pixelsToDraw = pixelTotal;
+		}
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 	{
 		xcb_query_tree_reply_t *const reply = xcb_query_tree_reply(connection, xcb_query_tree(connection, (*screen).root), NULL);
 		if(reply){
@@ -256,16 +418,14 @@ int main(const int argumentAmount, const char *const *argument){
 			const xcb_window_t *windowCurrent = windowStart;
 			const xcb_window_t *const windowWall = windowStart + amount;
 			Client *clientCurrent = clientStart;
-			xcb_get_geometry_cookie_t *const responseStart = malloc(amount * sizeof(xcb_get_geometry_cookie_t));
-			xcb_get_window_attributes_cookie_t *const response1Start = malloc(amount * sizeof(xcb_get_window_attributes_cookie_t));
-			xcb_get_geometry_cookie_t *responseCurrent = responseStart;
-			xcb_get_window_attributes_cookie_t *response1Current = response1Start;
-			xcb_get_geometry_cookie_t *responseWall;
-			jmp getWindowAttributesLoop;
+			Client **mappedClientCurrent = mappedClientStart;
+			xcb_get_window_attributes_reply_t *reply1;
+			uint counter = 0;
+			uint mappedCounter = 0;
 			getWindowAttributesLoop:{
-				xcb_get_window_attributes_reply_t *const reply1 = xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, *windowCurrent), NULL);
-				if(reply1){
+				if((reply1 = xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, *windowCurrent), NULL))){
 					if((*reply1)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
+						xcb_get_geometry_reply_t *const geometry = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, *windowCurrent), NULL);
 						if(clientAllocated == clientSize){
 							void *temp;
 							clientSize += CLIENT_BLOCK_SIZE;
@@ -276,23 +436,41 @@ int main(const int argumentAmount, const char *const *argument){
 							clientCurrent = clientStart + clientAllocated;
 						}
 						(*clientCurrent).window = *windowCurrent;
-
-
-
-						*responseCurrent = xcb_get_geometry(connection, *windowCurrent);
-						*response1Current = xcb_get_window_attributes(connection, *windowCurrent);
-
-
-
+						(*clientCurrent).listIndex = counter;
+						inc counter;
+						if(geometry){
+							(*clientCurrent).x = (*geometry).x;
+							(*clientCurrent).y = (*geometry).y;
+							(*clientCurrent).width = (*geometry).width;
+							(*clientCurrent).height = (*geometry).height;
+							free(geometry);
+						}else{
+							(*clientCurrent).x = (*screen).width_in_pixels;
+							(*clientCurrent).y = (*screen).height_in_pixels;
+							(*clientCurrent).width = 0;
+							(*clientCurrent).height = 0;
+						}
+						(*clientCurrent).mapped = (*reply1).map_state == XCB_MAP_STATE_VIEWABLE? true : false;
+						if((*clientCurrent).mapped){
+							(*clientCurrent).mappedListIndex = mappedCounter;
+							inc mappedCounter;
+							if(mappedClientAllocated == mappedClientSize){
+								void *temp;
+								mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
+								if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(Client *)))){
+									exit(1);
+								}
+								mappedClientStart = temp;
+								mappedClientCurrent = mappedClientStart + mappedClientAllocated;
+							}
+							*mappedClientCurrent = clientCurrent;
+							inc mappedClientCurrent;
+							inc mappedClientAllocated;
+						}
 						{
 							const uint32 valueList = XCB_EVENT_MASK_VISIBILITY_CHANGE;
 							xcb_change_window_attributes(connection, *windowCurrent, XCB_CW_EVENT_MASK, &valueList);
 						}
-
-
-
-						inc responseCurrent;
-						inc response1Current;
 						inc clientCurrent;
 						inc clientAllocated;
 					}
@@ -301,40 +479,7 @@ int main(const int argumentAmount, const char *const *argument){
 				if(inc windowCurrent < windowWall){
 					jmp getWindowAttributesLoop;
 				}
-				clientCurrent = clientStart;
-				responseWall = responseCurrent;
-				responseCurrent = responseStart;
-				response1Current = response1Start;
-				jmp getGeometryReplyLoop;
 			}
-			getGeometryReplyLoop:{
-				xcb_get_geometry_reply_t *const reply1 = xcb_get_geometry_reply(connection, *responseCurrent, NULL);
-				xcb_get_window_attributes_reply_t *const reply2 = xcb_get_window_attributes_reply(connection, *response1Current, NULL);
-				if(reply1){
-					(*clientCurrent).x = (*reply1).x;
-					(*clientCurrent).y = (*reply1).y;
-					(*clientCurrent).width = (*reply1).width;
-					(*clientCurrent).height = (*reply1).height;
-					free(reply1);
-				}else{
-					(*clientCurrent).x = 0;
-					(*clientCurrent).y = 0;
-					(*clientCurrent).width = 0;
-					(*clientCurrent).height = 0;
-				}
-				if(reply2){
-					(*clientCurrent).mapped = (*reply2).map_state == XCB_MAP_STATE_VIEWABLE? true : false;
-					free(reply2);
-				}else{
-					(*clientCurrent).mapped = false;
-				}
-				if(inc responseCurrent < responseWall){
-					inc response1Current;
-					inc clientCurrent;
-					jmp getGeometryReplyLoop;
-				}
-			}
-			free(responseStart);
 			free(reply);
 		}
 	}
@@ -348,16 +493,34 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 	{
+		uint i;
+		Client **current = mappedClientStart;
+		for(i = 0; i < mappedClientAllocated; inc i){
+			fprintf(stdout, "window %u\t\tlistIndex %u\t\tmappedListIndex %u\t\tmapped %u\t\t\n", (**current).window, (**current).listIndex, (**current).mappedListIndex, (**current).mapped);
+			inc current;
+		}
+	}
+
+
+
+
+
+
+
+
+
+	{
 		xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(connection, xcb_intern_atom(connection, false, strlen("_XROOTPMAP_ID"), "_XROOTPMAP_ID"), NULL);
-		xcb_get_property_reply_t *reply1;
-		xcb_atom_t atom = (*reply).atom;
-		free(reply);
-		if((reply1 = xcb_get_property_reply(connection, xcb_get_property(connection, false, (*screen).root, atom, XCB_ATOM_PIXMAP, 0, 1), NULL))){
-			wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply1);
-			if(!wallpaperPixmap){
-				fprintf(stdout, "pixmap not set\n");
+		if(reply){
+			xcb_get_property_reply_t *reply1 = xcb_get_property_reply(connection, xcb_get_property(connection, false, (*screen).root, (*reply).atom, XCB_ATOM_PIXMAP, 0, 1), NULL);
+			free(reply);
+			if(reply1){
+				wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply1);
+				if(!wallpaperPixmap){
+					fprintf(stdout, "pixmap not set\n");
+				}
+				free(reply1);
 			}
-			free(reply1);
 		}
 	}
 
@@ -473,10 +636,94 @@ int main(const int argumentAmount, const char *const *argument){
 		findObscuredWindowLoop:{
 			if((*listCurrent).window == window){
 				if((*(xcb_visibility_notify_event_t *)event).state == XCB_VISIBILITY_FULLY_OBSCURED){
-					(*listCurrent).mapped = false;
+
+
+
+					if((*listCurrent).mapped){
+						Client **current = mappedClientStart + (*listCurrent).mappedListIndex;
+						Client **wall = mappedClientStart + dec mappedClientAllocated;
+						while(current < wall){
+							*current = *(current + 1);
+							dec (**current).mappedListIndex;
+							inc current;
+						}
+						(*listCurrent).mapped = false;
+					}
+
+
+
+					{
+						uint i;
+						Client **current = mappedClientStart;
+						for(i = 0; i < mappedClientAllocated; inc i){
+							fprintf(stdout, "window %u\t\tlistIndex %u\t\tmappedListIndex %u\t\tmapped %u\t\t\n", (**current).window, (**current).listIndex, (**current).mappedListIndex, (**current).mapped);
+							inc current;
+						}
+					}
+
+
+
 					jmp eventLoop;
 				}
-				(*listCurrent).mapped = true;
+
+
+
+
+
+
+
+
+
+				if(!(*listCurrent).mapped){
+					if(mappedClientAllocated == mappedClientSize){
+						void *temp;
+						mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
+						if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(Client)))){
+							exit(1);
+						}
+						mappedClientStart = temp;
+					}
+					{
+						Client **current = mappedClientStart + mappedClientAllocated;
+						Client **currentCopy = current;
+						uint index = (*listCurrent).listIndex;
+						while(current > mappedClientStart and (**(current - 1)).listIndex > index){
+							*current = *(current - 1);
+							inc (**current).mappedListIndex;
+							dec current;
+						}
+						(*listCurrent).mappedListIndex = mappedClientAllocated - (currentCopy - current);
+						*current = listCurrent;
+						inc mappedClientAllocated;
+						(*listCurrent).mapped = true;
+					}
+				}
+
+
+
+
+
+
+
+
+
+				{
+					uint i;
+					Client **current = mappedClientStart;
+					for(i = 0; i < mappedClientAllocated; inc i){
+						fprintf(stdout, "window %u\t\tlistIndex %u\t\tmappedListIndex %u\t\tmapped %u\t\t\n", (**current).window, (**current).listIndex, (**current).mappedListIndex, (**current).mapped);
+						inc current;
+					}
+				}
+
+
+
+
+
+
+
+
+
 				jmp eventLoop;
 			}
 			if(inc listCurrent < listWall){
@@ -539,8 +786,14 @@ int main(const int argumentAmount, const char *const *argument){
 		Client *listCurrent = clientStart;
 		findDestroyedWindowLoop:{
 			if((*listCurrent).window == window){
+
+
+
 				(*listCurrent).window = (*(clientStart + clientAllocated - 1)).window;
 				dec clientAllocated;
+
+
+
 				jmp eventLoop;
 			}
 			if(inc listCurrent < listWall){
@@ -561,7 +814,33 @@ int main(const int argumentAmount, const char *const *argument){
 		Client *listCurrent = clientStart;
 		findUnmappedWindowLoop:{
 			if((*listCurrent).window == window){
-				(*listCurrent).mapped = false;
+
+
+
+				if((*listCurrent).mapped){
+					Client **current = mappedClientStart + (*listCurrent).mappedListIndex;
+					Client **wall = mappedClientStart + dec mappedClientAllocated;
+					while(current < wall){
+						*current = *(current + 1);
+						dec (**current).mappedListIndex;
+						inc current;
+					}
+					(*listCurrent).mapped = false;
+				}
+
+
+
+				{
+					uint i;
+					Client **current = mappedClientStart;
+					for(i = 0; i < mappedClientAllocated; inc i){
+						fprintf(stdout, "window %u\t\tlistIndex %u\t\tmappedListIndex %u\t\tmapped %u\t\t\n", (**current).window, (**current).listIndex, (**current).mappedListIndex, (**current).mapped);
+						inc current;
+					}
+				}
+
+
+
 				jmp eventLoop;
 			}
 			if(inc listCurrent < listWall){
@@ -582,7 +861,83 @@ int main(const int argumentAmount, const char *const *argument){
 		Client *listCurrent = clientStart;
 		findMappedWindowLoop:{
 			if((*listCurrent).window == window){
-				(*listCurrent).mapped = true;
+
+
+
+
+
+
+
+
+
+				if(!(*listCurrent).mapped){
+					if(mappedClientAllocated == mappedClientSize){
+						void *temp;
+						mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
+						if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(Client)))){
+							exit(1);
+						}
+						mappedClientStart = temp;
+					}
+					{
+
+
+
+
+
+
+
+
+
+						Client **current = mappedClientStart + mappedClientAllocated;
+						Client **currentCopy = current;
+						uint index = (*listCurrent).listIndex;
+						while(current > mappedClientStart and (**(current - 1)).listIndex > index){
+							*current = *(current - 1);
+							inc (**current).mappedListIndex;
+							dec current;
+						}
+						(*listCurrent).mappedListIndex = mappedClientAllocated - (currentCopy - current);
+						*current = listCurrent;
+						inc mappedClientAllocated;
+						(*listCurrent).mapped = true;
+
+
+
+
+
+
+
+
+
+					}
+				}
+
+
+
+
+
+
+
+
+
+				{
+					uint i;
+					Client **current = mappedClientStart;
+					for(i = 0; i < mappedClientAllocated; inc i){
+						fprintf(stdout, "window %u\t\tlistIndex %u\t\tmappedListIndex %u\t\tmapped %u\t\t\n", (**current).window, (**current).listIndex, (**current).mappedListIndex, (**current).mapped);
+						inc current;
+					}
+				}
+
+
+
+
+
+
+
+
+
 				jmp eventLoop;
 			}
 			if(inc listCurrent < listWall){
@@ -632,8 +987,8 @@ int main(const int argumentAmount, const char *const *argument){
 	}
 	printFrame:{
 		clock_t t = clock();
-		Client *clientCurrent = clientStart;
-		Client *clientWall = clientStart + clientAllocated;
+		Client **clientCurrent = mappedClientStart;
+		Client **clientWall = mappedClientStart + mappedClientAllocated;
 		xcb_get_image_cookie_t *frameCookieCurrent = frameCookieStart;
 		{
 			xcb_get_image_reply_t *const reply = xcb_get_image_reply(connection, xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, wallpaperPixmap, 0, 0, width, height, -1), NULL);
@@ -653,82 +1008,78 @@ int main(const int argumentAmount, const char *const *argument){
 			}
 		}
 		getImageCookieLoop:{
-			if((*clientCurrent).mapped){
-				*frameCookieCurrent = xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, (*clientCurrent).window, 0, 0, (*clientCurrent).width, (*clientCurrent).height, -1);
-				inc frameCookieCurrent;
-			}
+			*frameCookieCurrent = xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, (**clientCurrent).window, 0, 0, (**clientCurrent).width, (**clientCurrent).height, -1);
 			if(inc clientCurrent < clientWall){
+				inc frameCookieCurrent;
 				jmp getImageCookieLoop;
 			}
-			clientCurrent = clientStart;
+			clientCurrent = mappedClientStart;
 			frameCookieCurrent = frameCookieStart;
 		}
 		drawWindowsLoop:{
-			if((*clientCurrent).mapped){
-				xcb_get_image_reply_t *const reply = xcb_get_image_reply(connection, *frameCookieCurrent, NULL);
-				if(reply){
-					uint32 *sourceData = (void *)xcb_get_image_data(reply);
-					uint32 *destinationData = data + (*clientCurrent).y * width + (*clientCurrent).x;
-					int x;
-					int y;
-					int clientWidth = (*clientCurrent).width;
-					int clientHeight = (*clientCurrent).height;
-					switch (*reply).depth over
-						to 24:{
-							uint32 *dStart = destinationData;
-							uint32 *sStart = sourceData;
-							for(y = 0; y < clientHeight; inc y){
-								uint32 *dd = dStart;
-								uint32 *sd = sStart;
-								if((uint)((*clientCurrent).y + y) >= height){
+			xcb_get_image_reply_t *const reply = xcb_get_image_reply(connection, *frameCookieCurrent, NULL);
+			if(reply){
+				uint32 *sourceData = (void *)xcb_get_image_data(reply);
+				int clientX = (**clientCurrent).x;
+				int clientY = (**clientCurrent).y;
+				int clientWidth = (**clientCurrent).width;
+				int clientHeight = (**clientCurrent).height;
+				uint32 *destinationData = data + clientY * width + clientX;
+				int x;
+				int y;
+				uint32 *dStart = destinationData;
+				uint32 *sStart = sourceData;
+				switch (*reply).depth over
+					to 24:{
+						for(y = 0; y < clientHeight; inc y){
+							uint32 *dCurrent = dStart;
+							uint32 *sCurrent = sStart;
+							if((uint)(clientY + y) >= height){
+								brk;
+							}
+							for(x = 0; x < clientWidth; inc x){
+								if((uint)(clientX + x) >= width){
 									brk;
 								}
-								for(x = 0; x < clientWidth; inc x){
-									if((uint)((*clientCurrent).x + x) >= width){
-										brk;
-									}
-									*dd = *sd;
-									inc dd;
-									inc sd;
-								}
-								dStart += width;
-								sStart += clientWidth;
+								*dCurrent = *sCurrent;
+								inc dCurrent;
+								inc sCurrent;
 							}
-							brk;
+							dStart += width;
+							sStart += clientWidth;
 						}
-						to 32:{
-							uint32 *dStart = destinationData;
-							uint32 *sStart = sourceData;
-							for(y = 0; y < clientHeight; inc y){
-								uint32 *dd = dStart;
-								uint32 *sd = sStart;
-								if((uint)((*clientCurrent).y + y) >= height){
+						brk;
+					}
+					to 32:{
+						for(y = 0; y < clientHeight; inc y){
+							uint32 *dCurrent = dStart;
+							uint32 *sCurrent = sStart;
+							if((uint)(clientY + y) >= height){
+								brk;
+							}
+							for(x = 0; x < clientWidth; inc x){
+								if((uint)(clientX + x) >= width){
 									brk;
 								}
-								for(x = 0; x < clientWidth; inc x){
-									if((uint)((*clientCurrent).x + x) >= width){
-										brk;
-									}
-									if(*sd & 0xFF000000){
-										*dd = *sd;
-									}
-									inc dd;
-									inc sd;
+								if(*sCurrent & 0xFF000000){
+									*dCurrent = *sCurrent;
 								}
-								dStart += width;
-								sStart += clientWidth;
+								inc dCurrent;
+								inc sCurrent;
 							}
-							brk;
+							dStart += width;
+							sStart += clientWidth;
 						}
-						off:{
-							brk;
-						}
-					end
-					free(reply);
-				}
-				inc frameCookieCurrent;
+						brk;
+					}
+					off:{
+						brk;
+					}
+				end
+				free(reply);
 			}
 			if(inc clientCurrent < clientWall){
+				inc frameCookieCurrent;
 				jmp drawWindowsLoop;
 			}
 		}
@@ -739,13 +1090,15 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 		t = clock() - t;
+		avgClock += t;
 		if(t < minClock){
 			minClock = t;
 		}
 		if(t > maxClock){
 			maxClock = t;
 		}
-		printf("took %lu            min %lu            max %lu\n", t, minClock, maxClock);
+		inc avgClockCounter;
+		printf("took %lu\t\tmin %lu\t\tmax %lu\t\tavg %lu\n", t, minClock, maxClock, avgClock / avgClockCounter);
 
 
 
