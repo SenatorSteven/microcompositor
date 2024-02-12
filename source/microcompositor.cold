@@ -23,10 +23,6 @@
 */
 
 /*!
-	calculate a clientWall but only when updating allocated client size
-*/
-
-/*!
 	setup mechanism for wasteless drawing, such that front windows are handled before back windows
 
 	note: draw 24 bit windows first and then 32 bit
@@ -45,11 +41,13 @@
 */
 
 /*!
-	bug causes window to appear at (0, 0) when window is created. sometimes.
+	bug causes window to appear at (0, 0) when window is created. sometimes, probably when the clientAllocated counter goes up. querying root stacking order, which is the slow method, works fine.
 */
 
 /*!
-	spot when the wallpaper changes and update it
+	consider drawing frame after each event due to the fact that many events could arrive at the same time
+
+	consider multithreading which blocks execution of frame drawing when data is changed via event
 */
 
 
@@ -269,7 +267,7 @@ Monitor *monitorWall;
 bool *wallpaperTruthTableStart;
 uint pixelsToDraw;
 uint32 *pixmapData;
-xcb_atom_t activeWindowAtom;
+xcb_atom_t rootPixmapAtom;
 const uint32 windowValueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
 
 local Client *findWindow(const xcb_window_t w);
@@ -350,20 +348,9 @@ int main(const int argumentAmount, const char *const *argument){
 		}
 	}
 	{
-		const uint32 valueList = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+		const uint32 valueList = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE;
 		xcb_change_window_attributes(connection, (*screen).root, XCB_CW_EVENT_MASK, &valueList);
 		xcb_composite_redirect_subwindows(connection, (*screen).root, XCB_COMPOSITE_REDIRECT_MANUAL);
-	}
-
-
-
-	{
-		xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(connection, xcb_intern_atom(connection, true, strlen("_NET_ACTIVE_WINDOW"), "_NET_ACTIVE_WINDOW"), NULL);
-		activeWindowAtom = XCB_NONE;
-		if(reply){
-			activeWindowAtom = (*reply).atom;
-			free(reply);
-		}
 	}
 
 
@@ -480,16 +467,20 @@ int main(const int argumentAmount, const char *const *argument){
 
 	{
 		xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(connection, xcb_intern_atom(connection, false, strlen("_XROOTPMAP_ID"), "_XROOTPMAP_ID"), NULL);
+		rootPixmapAtom = XCB_NONE;
 		if(reply){
-			xcb_get_property_reply_t *reply1 = xcb_get_property_reply(connection, xcb_get_property(connection, false, (*screen).root, (*reply).atom, XCB_ATOM_PIXMAP, 0, 1), NULL);
+			rootPixmapAtom = (*reply).atom;
 			free(reply);
-			if(reply1){
-				wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply1);
+		}
+		if(rootPixmapAtom){
+			xcb_get_property_reply_t *reply = xcb_get_property_reply(connection, xcb_get_property(connection, false, (*screen).root, rootPixmapAtom, XCB_ATOM_PIXMAP, 0, 1), NULL);
+			if(reply){
+				wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply);
 				if(wallpaperPixmap){
 					void *reply = xcb_get_image_reply(connection, xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, wallpaperPixmap, 0, 0, width, height, -1), NULL);
 					pixmapData = (void *)xcb_get_image_data(reply);
 				}
-				free(reply1);
+				free(reply);
 			}
 		}
 	}
@@ -679,7 +670,7 @@ int main(const int argumentAmount, const char *const *argument){
 			to XCB_RESIZE_REQUEST: /*-------------*/ jmp unexpectedEvent;
 			to XCB_CIRCULATE_NOTIFY: /*-----------*/ jmp unexpectedEvent;
 			to XCB_CIRCULATE_REQUEST: /*----------*/ jmp unexpectedEvent;
-			to XCB_PROPERTY_NOTIFY: /*------------*/ jmp unexpectedEvent;
+			to XCB_PROPERTY_NOTIFY: /*------------*/ jmp propertyNotifyEvent;
 			to XCB_SELECTION_CLEAR: /*------------*/ jmp unexpectedEvent;
 			to XCB_SELECTION_REQUEST: /*----------*/ jmp unexpectedEvent;
 			to XCB_SELECTION_NOTIFY: /*-----------*/ jmp unexpectedEvent;
@@ -713,6 +704,7 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 
+#ifdef a
 		const xcb_window_t window = (*(xcb_create_notify_event_t *)event0).window;
 		xcb_get_window_attributes_reply_t *reply;
 		Client client;
@@ -798,6 +790,98 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 		*(clientStart + clientAllocated - 1) = client;
+#endif
+
+
+
+		clientAllocated = 0;
+		mappedClientAllocated = 0;
+		{
+			xcb_query_tree_reply_t *const reply = xcb_query_tree_reply(connection, xcb_query_tree(connection, (*screen).root), NULL);
+			if(reply){
+				const uint amount = xcb_query_tree_children_length(reply);
+				const xcb_window_t *const windowStart = xcb_query_tree_children(reply);
+				const xcb_window_t *windowCurrent = windowStart;
+				const xcb_window_t *const windowWall = windowStart + amount;
+				Client *clientCurrent = clientStart;
+				xcb_get_window_attributes_reply_t *reply1;
+				getWindowAttributes1Loop:{
+					if(*windowCurrent != overlayWindow and (reply1 = xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, *windowCurrent), NULL))){
+						if((*reply1)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
+							xcb_get_geometry_reply_t *const geometry = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, *windowCurrent), NULL);
+							if(clientAllocated == clientSize){
+								void *temp;
+								clientSize += CLIENT_BLOCK_SIZE;
+								if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
+									exit(1);
+								}
+								clientStart = temp;
+								clientCurrent = clientStart + clientAllocated;
+							}
+							(*clientCurrent).window = *windowCurrent;
+							if(geometry){
+								(*clientCurrent).x = (*geometry).x;
+								(*clientCurrent).y = (*geometry).y;
+								(*clientCurrent).width = (*geometry).width;
+								(*clientCurrent).height = (*geometry).height;
+								free(geometry);
+							}else{
+								(*clientCurrent).x = (*screen).width_in_pixels;
+								(*clientCurrent).y = (*screen).height_in_pixels;
+								(*clientCurrent).width = 0;
+								(*clientCurrent).height = 0;
+							}
+							(*clientCurrent).imageX = 0;
+							(*clientCurrent).imageY = 0;
+							(*clientCurrent).viewableX = (*clientCurrent).x;
+							(*clientCurrent).viewableY = (*clientCurrent).y;
+							(*clientCurrent).viewableWidth = (*clientCurrent).width;
+							(*clientCurrent).viewableHeight = (*clientCurrent).height;
+							(*clientCurrent).index = clientAllocated;
+							(*clientCurrent).mappedIndex = -1;
+							if((*clientCurrent).viewableX < 0){
+								(*clientCurrent).imageX = -(*clientCurrent).x;
+								(*clientCurrent).viewableWidth += (*clientCurrent).viewableX;
+								(*clientCurrent).viewableX = 0;
+							}
+							if((*clientCurrent).viewableY < 0){
+								(*clientCurrent).imageY = -(*clientCurrent).y;
+								(*clientCurrent).viewableHeight += (*clientCurrent).viewableY;
+								(*clientCurrent).viewableY = 0;
+							}
+							if((*clientCurrent).viewableX + (*clientCurrent).viewableWidth > width){
+								(*clientCurrent).viewableWidth -= (*clientCurrent).viewableX + (*clientCurrent).viewableWidth - width;
+							}
+							if((*clientCurrent).viewableY + (*clientCurrent).viewableHeight > height){
+								(*clientCurrent).viewableHeight -= (*clientCurrent).viewableY + (*clientCurrent).viewableHeight - height;
+							}
+							if((*reply1).map_state == XCB_MAP_STATE_VIEWABLE){
+								(*clientCurrent).mappedIndex = mappedClientAllocated;
+								if(mappedClientAllocated == mappedClientSize){
+									void *temp;
+									mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
+									if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(uint)))){
+										exit(1);
+									}
+									mappedClientStart = temp;
+								}
+								*(mappedClientStart + mappedClientAllocated) = clientAllocated;
+								inc mappedClientAllocated;
+							}
+							xcb_change_window_attributes(connection, *windowCurrent, XCB_CW_EVENT_MASK, &windowValueList);
+							inc clientCurrent;
+							inc clientAllocated;
+						}
+						free(reply1);
+					}
+					if(inc windowCurrent < windowWall){
+						jmp getWindowAttributes1Loop;
+					}
+				}
+				clientWall = clientStart + clientAllocated;
+				free(reply);
+			}
+		}
 
 
 
@@ -814,13 +898,13 @@ int main(const int argumentAmount, const char *const *argument){
 
 		/*! remove destroyed client from list */
 		{
-			Client *current = clientStart + (*client).index;
+			Client *clientCurrent = clientStart + (*client).index;
 			dec clientWall;
 			dec clientAllocated;
-			while(current < clientWall){
-				*current = *(current + 1);
-				dec (*current).index;
-				inc current;
+			while(clientCurrent < clientWall){
+				*clientCurrent = *(clientCurrent + 1);
+				dec (*clientCurrent).index;
+				inc clientCurrent;
 			}
 		}
 
@@ -828,26 +912,26 @@ int main(const int argumentAmount, const char *const *argument){
 
 		/*! update mapped client indexes */
 		{
-			Client *current = clientStart;
-			uint *mappedCurrent = mappedClientStart;
-			uint *mappedWall = mappedClientStart + mappedClientAllocated;
-			while(current < clientWall and mappedCurrent < mappedWall){
-				if((*current).mappedIndex != -1){
-					*mappedCurrent = (*current).index;
-					inc mappedCurrent;
+			Client *clientCurrent = clientStart;
+			uint *mappedClientCurrent = mappedClientStart;
+			uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
+			while(clientCurrent < clientWall and mappedClientCurrent < mappedClientWall){
+				if((*clientCurrent).mappedIndex != -1){
+					*mappedClientCurrent = (*clientCurrent).index;
+					inc mappedClientCurrent;
 				}
-				inc current;
+				inc clientCurrent;
 			}
 		}
 
 
 
 		{
-			uint *current = mappedClientStart;
-			uint *wall = mappedClientStart + mappedClientAllocated;
-			while(current < wall){
-				fprintf(stdout, "window %u\t\tindex %u\t\tmappedIndex %i\n", (*(clientStart + *current)).window, (*(clientStart + *current)).index, (*(clientStart + *current)).mappedIndex);
-				inc current;
+			uint *mappedClientCurrent = mappedClientStart;
+			uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
+			while(mappedClientCurrent < mappedClientWall){
+				fprintf(stdout, "window %u\t\tindex %u\t\tmappedIndex %i\n", (*(clientStart + *mappedClientCurrent)).window, (*(clientStart + *mappedClientCurrent)).index, (*(clientStart + *mappedClientCurrent)).mappedIndex);
+				inc mappedClientCurrent;
 			}
 		}
 
@@ -1002,6 +1086,22 @@ int main(const int argumentAmount, const char *const *argument){
 
 		jmp eventLoop;
 	}
+	propertyNotifyEvent:{
+		if((*(xcb_property_notify_event_t *)event0).atom == rootPixmapAtom){
+			if(rootPixmapAtom){
+				xcb_get_property_reply_t *reply = xcb_get_property_reply(connection, xcb_get_property(connection, false, (*screen).root, rootPixmapAtom, XCB_ATOM_PIXMAP, 0, 1), NULL);
+				if(reply){
+					wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply);
+					if(wallpaperPixmap){
+						void *reply = xcb_get_image_reply(connection, xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, wallpaperPixmap, 0, 0, width, height, -1), NULL);
+						pixmapData = (void *)xcb_get_image_data(reply);
+					}
+					free(reply);
+				}
+			}
+		}
+		jmp eventLoop;
+	}
 	errorEvent:{
 		genericError = (void *)event0;
 		printXCBError();
@@ -1014,32 +1114,33 @@ int main(const int argumentAmount, const char *const *argument){
 	}
 	printFrame:{
 		clock_t t = clock();
-		uint *clientCurrent = mappedClientStart;
-		uint *clientWall = mappedClientStart + mappedClientAllocated;
+		uint *mappedClientCurrent = mappedClientStart;
+		uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
 		xcb_get_image_cookie_t *frameCookieCurrent = frameCookieStart;
 		getImageCookieLoop:{
-			const Client *const c = clientStart + *clientCurrent;
+			const Client *const c = clientStart + *mappedClientCurrent;
 			*frameCookieCurrent = xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, (*c).window, (*c).imageX, (*c).imageY, (*c).viewableWidth, (*c).viewableHeight, -1);
-			if(inc clientCurrent < clientWall){
+			if(inc mappedClientCurrent < mappedClientWall){
 				inc frameCookieCurrent;
 				jmp getImageCookieLoop;
 			}
-			clientCurrent = mappedClientStart;
+			mappedClientCurrent = mappedClientStart;
 			frameCookieCurrent = frameCookieStart;
+			jmp drawWindowsLoop;
 		}
 		drawWindowsLoop:{
 			xcb_get_image_reply_t *const reply = xcb_get_image_reply(connection, *frameCookieCurrent, NULL);
 			if(reply){
-				const Client *const c = clientStart + *clientCurrent;
+				const Client *const c = clientStart + *mappedClientCurrent;
 				const int clientWidth = (*c).viewableWidth;
 				const int clientHeight = (*c).viewableHeight;
-				uint32 *sourceData = (void *)xcb_get_image_data(reply);
-				uint32 *destinationData = data + (*c).viewableY * width + (*c).viewableX;
-				uint32 *dStart = destinationData;
-				uint32 *sStart = sourceData;
-				uint32 *dWall = destinationData + width * clientHeight;
-				uint32 *dW = dStart + clientWidth;
 				if(clientWidth > 0 and clientHeight > 0){
+					uint32 *sourceData = (void *)xcb_get_image_data(reply);
+					uint32 *destinationData = data + (*c).viewableY * width + (*c).viewableX;
+					uint32 *dStart = destinationData;
+					uint32 *sStart = sourceData;
+					uint32 *dWall = destinationData + width * clientHeight;
+					uint32 *dW = dStart + clientWidth;
 					switch (*reply).depth over
 						to 24:{
 							while(dStart < dWall){
@@ -1067,19 +1168,10 @@ int main(const int argumentAmount, const char *const *argument){
 									}elif(alpha){
 										const uint32 a0 = alpha >> 24;
 										const uint32 a1 = 0xFF - a0;
-
-
-
 										const uint32 r = a0 * (*sCurrent & 0x00FF0000) + a1 * (*dCurrent & 0x00FF0000);
 										const uint32 g = a0 * (*sCurrent & 0x0000FF00) + a1 * (*dCurrent & 0x0000FF00);
 										const uint32 b = a0 * (*sCurrent & 0x000000FF) + a1 * (*dCurrent & 0x000000FF);
-
-
-
 										*dCurrent = ((r & 0xFF000000) + (g & 0x00FF0000) + (b & 0x0000FF00)) >> 8 | 0xFF000000;
-
-
-
 									}
 									inc dCurrent;
 									inc sCurrent;
@@ -1097,7 +1189,7 @@ int main(const int argumentAmount, const char *const *argument){
 				}
 				free(reply);
 			}
-			if(inc clientCurrent < clientWall){
+			if(inc mappedClientCurrent < mappedClientWall){
 				inc frameCookieCurrent;
 				jmp drawWindowsLoop;
 			}
@@ -1147,13 +1239,13 @@ int main(const int argumentAmount, const char *const *argument){
 	}
 }
 local Client *findWindow(const xcb_window_t w){
-	Client *current = clientStart;
+	Client *clientCurrent = clientStart;
 	jmp findClientLoop;
 	findClientLoop:{
-		if((*current).window == w){
-			ret current;
+		if((*clientCurrent).window == w){
+			ret clientCurrent;
 		}
-		if(inc current < clientWall){
+		if(inc clientCurrent < clientWall){
 			jmp findClientLoop;
 		}
 		ret NULL;
@@ -1161,13 +1253,13 @@ local Client *findWindow(const xcb_window_t w){
 }
 local void unmapWindow(Client *const client){
 	if((*client).mappedIndex != -1){
-		uint *current = mappedClientStart + (*client).mappedIndex;
-		uint *wall = mappedClientStart + dec mappedClientAllocated;
-		while(current < wall){
-			Client *const c = clientStart + *(current + 1);
-			*current = (*c).index;
+		uint *mappedClientCurrent = mappedClientStart + (*client).mappedIndex;
+		uint *mappedClientWall = mappedClientStart + dec mappedClientAllocated;
+		while(mappedClientCurrent < mappedClientWall){
+			Client *const c = clientStart + *(mappedClientCurrent + 1);
+			*mappedClientCurrent = (*c).index;
 			dec (*c).mappedIndex;
-			inc current;
+			inc mappedClientCurrent;
 		}
 		(*client).mappedIndex = -1;
 	}
@@ -1211,10 +1303,10 @@ local void calculateWallpaperStrips(void){
 		}
 	}
 	{
-		uint *current = mappedClientStart;
-		uint *wall = mappedClientStart + mappedClientAllocated;
+		uint *mappedClientCurrent = mappedClientStart;
+		uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
 		fillWallpaperTruthTableStartLoop:{
-			const Client *const c = clientStart + *current;
+			const Client *const c = clientStart + *mappedClientCurrent;
 			const int viewableWidth = (*c).viewableWidth;
 			const int viewableHeight = (*c).viewableHeight;
 			if(viewableWidth > 0 and viewableHeight > 0){
@@ -1231,7 +1323,7 @@ local void calculateWallpaperStrips(void){
 					wallpaperTruthTableCurrent += width - viewableWidth;
 				}
 			}
-			if(inc current < wall){
+			if(inc mappedClientCurrent < mappedClientWall){
 				jmp fillWallpaperTruthTableStartLoop;
 			}
 		}
