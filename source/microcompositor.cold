@@ -1,28 +1,5 @@
 /*!
-
-
-
-	IMPORTANT: monitor created and destroyed windows and put them (un)ordered into a list. after that, use pointers to refer to those clients. this way, we do heavy reordering operations rarely and add
-	           speed to the configure notify event
-
-
-
-*/
-
-/*!
-	monitor changes to overlay window, correct them if need be and adjust to permanent changes
-*/
-
-/*!
-	update z-order code in events (many) code
-*/
-
-/*!
-	idea: if a window is not absolutely instantly useful right now don't add it to the client list. fuck you, i need speed.
-*/
-
-/*!
-	write down how to deal with the final frame drawing + which windows to draw
+	check for monitor change issues
 */
 
 /*!
@@ -30,47 +7,60 @@
 */
 
 /*!
-	update configure notify. nothing new is mapped or unmapped so use the pointers to mapped windows for changes
-*/
-
-/*!
-	calculateWallpaperStrips() will need a serious update to conform with weird monitor setups
-*/
-
-/*!
-	setup mechanism for wasteless drawing, such that front windows are handled before back windows
-
-	note: draw 24 bit windows first and then 32 bit
-*/
-
-/*!
-	program *probably* crashes entire server when monitor setup changes
-*/
-
-/*!
-	review all request failures etc. replies and use appropriate placeholder values and responses
-*/
-
-/*!
-	update stacking order logic on create notify. who says it goes on the very top of the stacking order?
-*/
-
-/*!
-	bug causes window to appear at (0, 0) when window is created. sometimes, probably when the clientAllocated counter goes up. querying root stacking order, which is the slow method, works fine.
-*/
-
-/*!
-	consider drawing frame after each event due to the fact that many events could arrive at the same time
-
-	consider multithreading which blocks execution of frame drawing when data is changed via event
-*/
-
-/*!
 	sometimes the wallpaper data are not set even though the pixmap is. find what causes that.
 */
 
 /*!
-	update the malloc for frameCookieStart
+	maybe setup a picture or an equivalent to be drawn when rectangles of the root are viewable
+*/
+
+/*!
+	rectangle splitting can create rectangles that can be combined into one (yikes)
+*/
+
+/*!
+	consider force mapping the area behind a window when it unmaps
+*/
+
+/*!
+	fix all kinds of issues that can be safely called basic and then move onto 32 bit window handling.
+
+
+
+	basic includes faultless composition at idle-tier speeds where all windows are treated as 24 bit.
+	then deal with how the wallpaper works and then deal with 32 bit windows.
+*/
+
+/*!
+	consider not drawing anything outside the screen
+*/
+
+/*!
+	windows that move will leave a trail until the below window is updated.
+*/
+
+/*!
+	treat root as a normal window and maybe always keep it as the starting window in the window order. also try extensions and selecting input on the root.
+*/
+
+/*!
+	findClient() should be used only after a fastFindClient() is used.
+
+	fastFindClient() should hold the n, say 5, last seen windows.
+*/
+
+/*!
+	is there a way to draw all changes in a single call? multiple xcb_put_image() are bad for your health, swear!
+*/
+
+/*!
+	consider getting up to n events from the loop and doing them at the same time
+*/
+
+/*!
+	grab server when doing critical operation when the server starts
+
+	ungrab afterwards
 */
 
 
@@ -133,345 +123,171 @@ SOFTWARE. */
 	#include <xcb/composite.h>
 	#include <xcb/damage.h>
 	#include <xcb/randr.h>
+	#include <xcb/render.h>
+	#include <xcb/shape.h>
 	#include <xcb/xcb.h>
 	#include <xcb/xcbext.h>
 	#include "cold/cold.hold"
 /*!}*/
 
 /*!user_defines:{*/
-	#define DefaultErrorStream /*---------*/ (stderr)
+	#define DefaultErrorStream /*-------------*/ (stderr)
 /*!}*/
 
 /*!defines:{*/
-	#define DEBUG /*----------------------*/ (true)
+	#define DEBUG /*--------------------------*/ (true)
 
-	#define _EMPTY_MACRO /*---------------*/
+	#define _EMPTY_MACRO /*-------------------*/
 
-	#if DEBUG
-		#define _PRINTEVENT_DEC /*-------------*/ local void printEvent(void)
-		#define _PRINTUNEXPECTEDEVENT_DEC /*---*/ local void printUnexpectedEvent(void)
-		#define _printEvent(void) /*-----------*/ (printEvent())
-		#define _printUnexpectedEvent(void) /*-*/ (printUnexpectedEvent())
-	#else
-		#define _PRINTEVENT_DEC /*-------------*/ def void dA
-		#define _PRINTUNEXPECTEDEVENT_DEC /*---*/ def void a2
-		#define _printEvent(void) /*-----------*/ _EMPTY_MACRO
-		#define _printUnexpectedEvent(void) /*-*/ _EMPTY_MACRO
-	#endif
+	#define FINDCLIENT() /*-------------------*/ local Client *findClient(const xcb_window_t window)
+	#define REMOVECLIENT() /*-----------------*/ local void    removeClient(Client *const client)
+	#define UNMAPWINDOW() /*------------------*/ local void    unmapWindow(Client *const client)
+	#define MAPWINDOW() /*--------------------*/ local void    mapWindow(Client *const client)
+	#define ADDCLIENT() /*--------------------*/ local bool    addClient(const xcb_window_t window)
+	#define QUERYTREE() /*--------------------*/ local void    queryTree(void)
+	#define UPDATEORDER() /*------------------*/ local void    updateOrder(void)
+	#define FINDINTERSECTINGRECTANGLE() /*----*/ local bool    findIntersectingRectangle(int leftX0, int topY0, int width0, int height0, int leftX1, int topY1, int width1, int height1, int *retX, int *retY, int *retWidth, int *retHeight)
+	#define SPLITRECTANGLE() /*---------------*/ local void    splitRectangle(int x, int y, int w, int h, int interX, int interY, int interW, int interH, uint *size, uint *allocated, Rectangle **rectangle)
+	#define CALCULATEVIEWABLEWINDOWSIZES() /*-*/ local void    calculateViewableWindowSizes(void)
 
-	#define PRINTERROR_DEC /*-------------*/ local void printError(const char *const string)
-	#define OPENERRORSTREAM_DEC /*--------*/ local bool openErrorStream(void)
-	#define CLOSEERRORSTREAM_DEC /*-------*/ local void closeErrorStream(void)
-	#define PRINTCONNECTIONERROR_DEC /*---*/ local void printConnectionError(void)
-	#define PRINTEVENT_DEC /*-------------*/ _PRINTEVENT_DEC
-	#define PRINTXCBERROR_DEC /*----------*/ local void printXCBError(void)
-	#define PRINTUNEXPECTEDEVENT_DEC /*---*/ _PRINTUNEXPECTEDEVENT_DEC
+	#define PRINTERROR() /*-------------------*/ local void    printError(const char *const string)
+	#define OPENERRORSTREAM() /*--------------*/ local bool    openErrorStream(void)
+	#define CLOSEERRORSTREAM() /*-------------*/ local void    closeErrorStream(void)
+	#define PRINTCONNECTIONERROR() /*---------*/ local void    printConnectionError(void)
+	#define PRINTXCBERROR() /*----------------*/ local void    printXCBError(void)
 
-	#define printEvent(void) /*-----------*/ _printEvent()
-	#define printUnexpectedEvent(void) /*-*/ _printUnexpectedEvent()
+	#define xcb_wait_for_reply(a, b, c) /*----*/ (xcb_wait_for_reply(a, (b).sequence, c))
 
-	#define xcb_wait_for_reply(a, b, c) /*-*/ (xcb_wait_for_reply(a, (b).sequence, c))
+	#define LITERAL_LENGTH(l) /*--------------*/ (sizeof(l) - 1)
 
-	#define LITERAL_LENGTH(l) /*-------------------*/ (sizeof(l) - 1)
+	#define _b(d, b) /*-----------------------*/ (d > (sizeof(#b) - 1)? 0 : ((*(#b + (sizeof(#b) - 1) - d) - 48) == 1) * ((uint64)1 << (d - 1)))
+
+	#define b(b) /*---------------------------*/ ( \
+		  _b( 1, b) + _b( 2, b) + _b( 3, b) + _b( 4, b) + _b( 5, b) + _b( 6, b) + _b( 7, b) + _b( 8, b) \
+		+ _b( 9, b) + _b(10, b) + _b(11, b) + _b(12, b) + _b(13, b) + _b(14, b) + _b(15, b) + _b(16, b) \
+		+ _b(17, b) + _b(18, b) + _b(19, b) + _b(20, b) + _b(21, b) + _b(22, b) + _b(23, b) + _b(24, b) \
+		+ _b(25, b) + _b(26, b) + _b(27, b) + _b(28, b) + _b(29, b) + _b(30, b) + _b(31, b) + _b(32, b) \
+		+ _b(33, b) + _b(34, b) + _b(35, b) + _b(36, b) + _b(37, b) + _b(38, b) + _b(39, b) + _b(40, b) \
+		+ _b(41, b) + _b(42, b) + _b(43, b) + _b(44, b) + _b(45, b) + _b(46, b) + _b(47, b) + _b(48, b) \
+		+ _b(49, b) + _b(50, b) + _b(51, b) + _b(52, b) + _b(53, b) + _b(54, b) + _b(55, b) + _b(56, b) \
+		+ _b(57, b) + _b(58, b) + _b(59, b) + _b(60, b) + _b(61, b) + _b(62, b) + _b(63, b) + _b(64, b) \
+	)
+
+	#define RECTANGLE_BLOCK_SIZE /*-----------*/ (8)
+	#define CLIENT_BLOCK_SIZE /*--------------*/ (128)
 /*!}*/
 
 /*!globals:{*/
-	#define xScreen /*-------*/ xcb_screen_t
-	#define xConnection /*---*/ xcb_connection_t
-	#define xGenericError /*-*/ xcb_generic_error_t
-	const char * /*----*/ programName;
-	const char * /*----*/ errorPath;
-	const char * /*----*/ connectionName;
-	const xScreen * /*-*/ screen;
-	const char * /*----*/ quitMessage;
-	bool /*------------*/ mustOpenErrorStream;
-	FILE * /*----------*/ errorStream;
-	xConnection * /*---*/ connection;
-	xGenericError * /*-*/ genericError;
+	const char * /*----------*/ programName;
+	const char * /*----------*/ errorPath;
+	const char * /*----------*/ connectionName;
+	const xcb_screen_t * /*--*/ screen;
+	const char * /*----------*/ quitMessage;
+	bool /*------------------*/ mustOpenErrorStream;
+	FILE * /*----------------*/ errorStream;
+	xcb_connection_t * /*----*/ connection;
+	xcb_generic_error_t * /*-*/ genericError;
 	xcb_generic_event_t * /*-*/ event0;
-	xcb_generic_event_t * /*-*/ event1;
-	#undef  xGenericError
-	#undef  xConnection
-	#undef  xScreen
 /*!}*/
 
 /*!functions:{*/
-	PRINTERROR_DEC;
-	OPENERRORSTREAM_DEC;
-	CLOSEERRORSTREAM_DEC;
-	PRINTCONNECTIONERROR_DEC;
-	PRINTEVENT_DEC;
-	PRINTXCBERROR_DEC;
-	PRINTUNEXPECTEDEVENT_DEC;
+	PRINTERROR();
+	OPENERRORSTREAM();
+	CLOSEERRORSTREAM();
+	PRINTCONNECTIONERROR();
+	PRINTXCBERROR();
 /*!}*/
 
-#define CLIENT_BLOCK_SIZE /*----------*/ (32)
-#define MAPPED_CLIENT_BLOCK_SIZE /*---*/ (16)
-#define WALLPAPER_STRIP_BLOCK_SIZE /*-*/ (1024)
-
 def struct{
-	uint32 /*--------------*/ x;
-	uint32 /*--------------*/ y;
-	uint32 /*--------------*/ w;
-	uint32 /*--------------*/ h;
+	int32 /*-------------------*/ x;
+	int32 /*-------------------*/ y;
+	int32 /*-------------------*/ w;
+	int32 /*-------------------*/ h;
 } Rectangle;
 
 def struct{
-	Rectangle * /*---------*/ rectangle;
-	uint32 /*--------------*/ size;
-	uint32 /*--------------*/ allocated;
+	Rectangle * /*-------------*/ rectangle;
+	uint32 /*------------------*/ size;
+	uint32 /*------------------*/ allocated;
 
-	xcb_window_t /*--------*/ window;
-	xcb_damage_damage_t /*-*/ damage;
-	xcb_visualid_t /*------*/ visual;
+	xcb_window_t /*------------*/ window;
+	xcb_damage_damage_t /*-----*/ damage;
+	xcb_visualid_t /*----------*/ visual;
 	xcb_render_pictformat_t /*-*/ format;
-	xcb_render_picture_t /*-*/ picture;
+	xcb_render_picture_t /*----*/ picture;
 
-	int32 /*---------------*/ x;
-	int32 /*---------------*/ y;
-	int32 /*---------------*/ width;
-	int32 /*---------------*/ height;
+	int32 /*-------------------*/ x;
+	int32 /*-------------------*/ y;
+	int32 /*-------------------*/ w;
+	int32 /*-------------------*/ h;
 
-	int32 /*---------------*/ imageX;
-	int32 /*---------------*/ imageY;
+	bool /*--------------------*/ shaped;
+	bool /*--------------------*/ mapped;
 
-	int32 /*---------------*/ viewableX;
-	int32 /*---------------*/ viewableY;
-	int32 /*---------------*/ viewableRightX;
-	int32 /*---------------*/ viewableBottomY;
-	int32 /*---------------*/ viewableWidth;
-	int32 /*---------------*/ viewableHeight;
-
-	uint8 /*---------------*/ depth;
-	uint8 /*---------------*/ pad0[7];
-
-	uint16 /*--------------*/ index;
-	int16 /*---------------*/ mappedIndex;
+	uint8 /*-------------------*/ depth;
+	uint8 /*-------------------*/ pad0[1];
 } Client;
 
 def struct{
-	uint16 /*--------------*/ x;
-	uint16 /*--------------*/ y;
-	uint16 /*--------------*/ w;
-	uint16 /*--------------*/ h;
+	uint16 /*------------------*/ x;
+	uint16 /*------------------*/ y;
+	uint16 /*------------------*/ w;
+	uint16 /*------------------*/ h;
 } Monitor;
 
-def struct{
-	uint32 /*--------------*/ start;
-	uint32 /*--------------*/ wall;
-} WallpaperStrip;
-
+const uint32 windowValueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
 uint damageBaseEvent;
 uint damageBaseError;
-Client *clientStart;
-Client *clientWall;
+uint renderBaseEvent;
+uint renderBaseError;
+uint randrBaseEvent;
+uint randrBaseError;
+
+
+
+xcb_atom_t pixmapAtom;
+xcb_atom_t rootPixmapAtom;
+xcb_render_pictformat_t rootFormat;
+xcb_pixmap_t wallpaperPixmap;
+xcb_render_picture_t wallpaperPicture;
+xcb_pixmap_t bufferPixmap;
+xcb_render_picture_t bufferPicture;
+xcb_render_picture_t rootPicture;
+
+
+
 uint clientSize = CLIENT_BLOCK_SIZE;
 uint clientAllocated = 0;
-uint *mappedClientStart;
-uint mappedClientSize = MAPPED_CLIENT_BLOCK_SIZE;
-uint mappedClientAllocated = 0;
-WallpaperStrip *wallpaperStripStart;
-uint wallpaperStripSize = WALLPAPER_STRIP_BLOCK_SIZE;
-uint wallpaperStripAllocated;
-xcb_pixmap_t wallpaperPixmap;
-int width;
-int height;
-uint32 *data;
-xcb_gcontext_t overlaygc;
-xcb_window_t overlayWindow;
-xcb_get_image_cookie_t *frameCookieStart;
-int64 minClock = 100000;
-int64 maxClock = 0;
-int64 avgClock = 0;
-uint avgClockCounter = 0;
+Client *clientStart;
+Client *clientWall;
+
+
+
 uint monitorAmount;
 void *monitorData;
 Monitor *monitorStart;
 Monitor *monitorWall;
-bool *wallpaperTruthTableStart;
-uint pixelsToDraw;
-uint32 *pixmapData;
-xcb_atom_t rootPixmapAtom;
-const uint32 windowValueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
-uint timerArray[5] = {0, 0, 0, 0, 0};
-xcb_get_property_reply_t *pixmapReply;
-void *wallpaperReply;
-xcb_render_picture_t pictureDest;
+
+
+
+uint *orderedClientOffsetStart;
+xcb_window_t overlayWindow;
 uint visualAmount;
 xcb_render_pictvisual_t *visualStart;
-
-local Client *findWindow(const xcb_window_t w);
-local void    unmapWindow(Client *const client);
-local void    mapWindow(Client *const client);
-/*! local void    calculateWallpaperStrips(void);
-local void    printWallpaper(void); */
+xcb_query_tree_reply_t *treeReply;
 
 
 
-
-
-
-
-
-
-/*!
-	how this is supposed to work:
-	1. configure notify comes in
-	2. a window that may be intersecting with another is configured so we must find which windows are intersecting with it. hint: do it basically now, maybe use data structures later
-	3. do the above for now
-*/
-
-#define RECTANGLE_BLOCK_SIZE /*-*/ (8)
-local bool findIntersectingArea(int leftX0, int topY0, int width0, int height0, int leftX1, int topY1, int width1, int height1, int *retX, int *retY, int *retWidth, int *retHeight){
-	int  rightX0 = leftX0 +  width0;
-	int  rightX1 = leftX1 +  width1;
-	int bottomY0 =  topY0 + height0;
-	int bottomY1 =  topY1 + height1;
-	if(leftX1 < rightX0 and rightX1 > leftX0 and topY1 < bottomY0 and bottomY1 > topY0){
-		*retX      =    leftX0 >   leftX1?   leftX0 :   leftX1;
-		*retY      =     topY0 >    topY1?    topY0 :    topY1;
-		*retWidth  = ( rightX0 <  rightX1?  rightX0 :  rightX1) - *retX;
-		*retHeight = (bottomY0 < bottomY1? bottomY0 : bottomY1) - *retY;
-		/*! fprintf(stdout, "\nnew intersect{ %i %i %i %i }\n", *retX, *retY, *retWidth, *retHeight); */
-		ret true;
-	}
-	ret false;
-}
-local void rectSplit(int x, int y, int width, int height, int interX, int interY, int interWidth, int interHeight, uint *size, uint *allocated, Rectangle **existingDataStart){
-	Rectangle *current;
-	if(!existingDataStart){
-		Rectangle *start = malloc(RECTANGLE_BLOCK_SIZE * sizeof(Rectangle));
-		if(!start){
-			ret;
-		}
-		*size = RECTANGLE_BLOCK_SIZE;
-		*existingDataStart = start;
-		current = start;
-	}else{
-		if(allocated + 4 >= size){
-			void *temp;
-			*size += RECTANGLE_BLOCK_SIZE;
-			if(!(temp = realloc(*existingDataStart, *size * sizeof(Rectangle)))){
-				ret;
-			}
-			*existingDataStart = temp;
-		}
-		current = *existingDataStart + *allocated;
-	}
-	if(interY > y){
-		(*current).x = x;
-		(*current).y = y;
-		(*current).w = width;
-		(*current).h = interY - y;
-		/*! fprintf(stdout, "new    up-rect{ %i %i %i %i }\n", (*current).x, (*current).y, (*current).w, (*current).h); */
-		inc current;
-	}
-	if(interY + interHeight < y + height){
-		(*current).x = x;
-		(*current).y = interY + interHeight;
-		(*current).w = width;
-		(*current).h = y + height - interY - interHeight;
-		/*! fprintf(stdout, "new  down-rect{ %i %i %i %i }\n", (*current).x, (*current).y, (*current).w, (*current).h); */
-		inc current;
-	}
-	if(interX > x){
-		(*current).x = x;
-		(*current).y = interY;
-		(*current).w = interX - x;
-		(*current).h = interHeight;
-		/*! fprintf(stdout, "new  left-rect{ %i %i %i %i }\n", (*current).x, (*current).y, (*current).w, (*current).h); */
-		inc current;
-	}
-	if(interX + interWidth < x + width){
-		(*current).x = interX + interWidth;
-		(*current).y = interY;
-		(*current).w = x + width - interX - interWidth;
-		(*current).h = interHeight;
-		/*! fprintf(stdout, "new right-rect{ %i %i %i %i }\n", (*current).x, (*current).y, (*current).w, (*current).h); */
-		inc current;
-	}
-	*allocated = current - *existingDataStart;
-	ret;
-}
-local void calculateViewableWindowSizes(void){
-	int i;
-	int ii;
-
-
-
-	{
-		uint i;
-		for(i = 0; i < mappedClientAllocated; inc i){
-			Client *c0 = clientStart + *(mappedClientStart + i);
-			free((*c0).rectangle);
-			(*c0).rectangle = NULL;
-		}
-	}
-
-
-
-	for(i = mappedClientAllocated - 1; i >= 0; dec i){
-
-
-
-		for(ii = i - 1; ii >= 0; dec ii){
-
-
-
-			Client *c0 = clientStart + *(mappedClientStart + i);
-			Client *c1 = clientStart + *(mappedClientStart + ii);
-			int x;
-			int y;
-			int w;
-			int h;
-			if(findIntersectingArea((*c0).viewableX, (*c0).viewableY, (*c0).viewableWidth, (*c0).viewableHeight, (*c1).viewableX, (*c1).viewableY, (*c1).viewableWidth, (*c1).viewableHeight, &x, &y, &w, &h)){
-				if(!(*c1).rectangle){
-					/*! fprintf(stdout, " pre-split\n"); */
-					rectSplit((*c1).viewableX, (*c1).viewableY, (*c1).viewableWidth, (*c1).viewableHeight, x, y, w, h, &(*c1).size, &(*c1).allocated, &(*c1).rectangle);
-					/*! fprintf(stdout, "post-split\n"); */
-				}else{
-					uint size = (*c1).size;
-					uint allocated = (*c1).allocated;
-					Rectangle *rectangleStart = malloc(size * sizeof(Rectangle));
-					if(rectangleStart){
-						Rectangle *current = (*c1).rectangle;
-						Rectangle *wall = current + allocated;
-						while(current < wall){
-							if(findIntersectingArea((*c0).viewableX, (*c0).viewableY, (*c0).viewableWidth, (*c0).viewableHeight, (*current).x, (*current).y, (*current).w, (*current).h, &x, &y, &w, &h)){
-								/*! fprintf(stdout, " pre-split\n"); */
-								rectSplit((*current).x, (*current).y, (*current).w, (*current).h, x, y, w, h, &size, &allocated, &rectangleStart);
-								/*! fprintf(stdout, "post-split\n"); */
-							}
-							inc current;
-							/*! fprintf(stdout, "\n"); */
-						}
-						free((*c1).rectangle);
-						(*c1).size = size;
-						(*c1).allocated = allocated;
-						(*c1).rectangle = rectangleStart;
-					}
-				}
-			}
-
-
-
-		}
-		/*! fprintf(stdout, "\n"); */
-	}
-
-
-
-	ret;
-}
-#undef  RECTANGLE_BLOCK_SIZE
-
-
-
-
-
-
-
-
+FINDCLIENT();
+REMOVECLIENT();
+UNMAPWINDOW();
+MAPWINDOW();
+ADDCLIENT();
+QUERYTREE();
+UPDATEORDER();
+FINDINTERSECTINGRECTANGLE();
+SPLITRECTANGLE();
+CALCULATEVIEWABLEWINDOWSIZES();
 
 int main(const int argumentAmount, const char *const *argument){
 	(void)argumentAmount;
@@ -485,39 +301,10 @@ int main(const int argumentAmount, const char *const *argument){
 		connection /*----------*/ = NULL;
 		genericError /*--------*/ = NULL;
 		event0 /*--------------*/ = NULL;
-		event1 /*--------------*/ = NULL;
 		quitMessage /*---------*/ = NULL;
-
-
-
-		pixmapData /*----------*/ = NULL;
-
-
-		pixmapReply /*---------*/ = NULL;
-		wallpaperReply /*------*/ = NULL;
-
-
-
-		clientStart = malloc(clientSize * sizeof(Client));
-		if(!clientStart){
-			fprintf(stdout, "no clientstart\n");
-		}
-		clientWall = clientStart + clientAllocated;
-		mappedClientStart = malloc(clientSize * sizeof(uint));
-		if(!mappedClientStart){
-			fprintf(stdout, "no mappedClientStart\n");
-		}
-		wallpaperStripStart = malloc(wallpaperStripSize * sizeof(WallpaperStrip));
-		if(!wallpaperStripStart){
-			fprintf(stdout, "no wallpaperStripStart\n");
-		}
-
-
-
-		frameCookieStart = malloc(128 * sizeof(xcb_get_image_cookie_t));
-
-
-
+		treeReply /*-----------*/ = NULL;
+		wallpaperPixmap /*-----*/ = XCB_NONE;
+		wallpaperPicture /*----*/ = XCB_NONE;
 		jmp establishServerConnection;
 	}
 	establishServerConnection:{
@@ -531,6 +318,117 @@ int main(const int argumentAmount, const char *const *argument){
 			off: /*--------------------*/ printConnectionError(); /*-----------------------------------------*/ jmp mainEmergencyExit;
 		end
 	}
+	damageBaseEvent = 0;
+	damageBaseError = 0;
+	renderBaseEvent = 0;
+	renderBaseError = 0;
+	randrBaseEvent = 0;
+	randrBaseError = 0;
+	{
+		const xcb_query_extension_cookie_t compositeCookie = xcb_query_extension_unchecked(connection, LITERAL_LENGTH("Composite"), "Composite");
+		const xcb_query_extension_cookie_t damageCookie = xcb_query_extension_unchecked(connection, LITERAL_LENGTH("DAMAGE"), "DAMAGE");
+		const xcb_query_extension_cookie_t randrCookie = xcb_query_extension_unchecked(connection, LITERAL_LENGTH("RANDR"), "RANDR");
+		const xcb_query_extension_cookie_t renderCookie = xcb_query_extension_unchecked(connection, LITERAL_LENGTH("RENDER"), "RENDER");
+		const xcb_query_extension_cookie_t xfixesCookie = xcb_query_extension_unchecked(connection, LITERAL_LENGTH("XFIXES"), "XFIXES");
+		const xcb_query_extension_cookie_t shapeCookie = xcb_query_extension_unchecked(connection, LITERAL_LENGTH("SHAPE"), "SHAPE");
+		xcb_query_extension_reply_t *const compositeReply = xcb_wait_for_reply(connection, compositeCookie, NULL);
+		xcb_query_extension_reply_t *const damageReply = xcb_wait_for_reply(connection, damageCookie, NULL);
+		xcb_query_extension_reply_t *const randrReply = xcb_wait_for_reply(connection, randrCookie, NULL);
+		xcb_query_extension_reply_t *const renderReply = xcb_wait_for_reply(connection, renderCookie, NULL);
+		xcb_query_extension_reply_t *const xfixesReply = xcb_wait_for_reply(connection, xfixesCookie, NULL);
+		xcb_query_extension_reply_t *const shapeReply = xcb_wait_for_reply(connection, shapeCookie, NULL);
+		if(!compositeReply or !(*compositeReply).present){
+			fprintf(stdout, "composite extension not available\n");
+		}else{
+			free(compositeReply);
+		}
+		if(!damageReply or !(*damageReply).present){
+			fprintf(stdout, "damage extension not available\n");
+		}else{
+			const xcb_query_extension_reply_t *const reply = xcb_get_extension_data(connection, &xcb_damage_id);
+			damageBaseEvent = 0;
+			damageBaseError = 0;
+			if(reply and (*reply).present){
+				damageBaseEvent = (*reply).first_event;
+				damageBaseError = (*reply).first_error;
+			}
+			free(damageReply);
+		}
+		if(!randrReply or !(*randrReply).present){
+			fprintf(stdout, "randr extension not available\n");
+		}else{
+			free(randrReply);
+		}
+		if(!renderReply or !(*renderReply).present){
+			fprintf(stdout, "render extension not available\n");
+		}else{
+			const xcb_query_extension_reply_t *const reply = xcb_get_extension_data(connection, &xcb_render_id);
+			renderBaseEvent = 0;
+			renderBaseError = 0;
+			if(reply and (*reply).present){
+				renderBaseEvent = (*reply).first_event;
+				renderBaseError = (*reply).first_error;
+			}
+			free(renderReply);
+		}
+		if(!xfixesReply or !(*xfixesReply).present){
+			fprintf(stdout, "xfixes extension not available\n");
+		}else{
+			free(xfixesReply);
+		}
+		if(!shapeReply or !(*shapeReply).present){
+			fprintf(stdout, "shape extension not available\n");
+		}else{
+			free(shapeReply);
+		}
+	}
+	{
+		xcb_damage_query_version_cookie_t compositeCookie = xcb_damage_query_version_unchecked(connection, XCB_COMPOSITE_MAJOR_VERSION, XCB_COMPOSITE_MINOR_VERSION);
+		xcb_damage_query_version_cookie_t damageCookie = xcb_damage_query_version_unchecked(connection, XCB_DAMAGE_MAJOR_VERSION, XCB_DAMAGE_MINOR_VERSION);
+		xcb_damage_query_version_cookie_t renderCookie = xcb_damage_query_version_unchecked(connection, XCB_RENDER_MAJOR_VERSION, XCB_RENDER_MINOR_VERSION);
+		xcb_damage_query_version_cookie_t randrCookie = xcb_damage_query_version_unchecked(connection, XCB_RANDR_MAJOR_VERSION, XCB_RANDR_MINOR_VERSION);
+		xcb_xfixes_query_version_cookie_t xfixesCookie = xcb_xfixes_query_version_unchecked(connection, XCB_XFIXES_MAJOR_VERSION, XCB_XFIXES_MINOR_VERSION);
+		xcb_xfixes_query_version_cookie_t shapeCookie = xcb_xfixes_query_version_unchecked(connection, XCB_SHAPE_MAJOR_VERSION, XCB_SHAPE_MINOR_VERSION);
+		xcb_damage_query_version_reply_t *compositeReply = xcb_wait_for_reply(connection, compositeCookie, NULL);
+		xcb_damage_query_version_reply_t *damageReply = xcb_wait_for_reply(connection, damageCookie, NULL);
+		xcb_damage_query_version_reply_t *renderReply = xcb_wait_for_reply(connection, renderCookie, NULL);
+		xcb_damage_query_version_reply_t *randrReply = xcb_wait_for_reply(connection, randrCookie, NULL);
+		xcb_xfixes_query_version_reply_t *xfixesReply = xcb_wait_for_reply(connection, xfixesCookie, NULL);
+		xcb_xfixes_query_version_reply_t *shapeReply = xcb_wait_for_reply(connection, shapeCookie, NULL);
+		if(compositeReply){
+			free(compositeReply);
+		}else{
+			fprintf(stdout, "%s: could not query composite extension\n", programName);
+		}
+		if(damageReply){
+			free(damageReply);
+		}else{
+			fprintf(stdout, "%s: could not query damage extension\n", programName);
+		}
+		if(renderReply){
+			free(renderReply);
+		}else{
+			fprintf(stdout, "%s: could not query render extension\n", programName);
+		}
+		if(randrReply){
+			free(randrReply);
+		}else{
+			fprintf(stdout, "%s: could not query randr extension\n", programName);
+		}
+		if(xfixesReply){
+			free(xfixesReply);
+		}else{
+			fprintf(stdout, "%s: could not query xfixes extension\n", programName);
+		}
+		if(shapeReply){
+			free(shapeReply);
+		}else{
+			fprintf(stdout, "%s: could not query shape extension\n", programName);
+		}
+	}
+
+
+
 	{
 		xcb_composite_get_overlay_window_reply_t *overlay = xcb_wait_for_reply(connection, xcb_composite_get_overlay_window_unchecked(connection, (*screen).root), NULL);
 		if(overlay){
@@ -539,16 +437,29 @@ int main(const int argumentAmount, const char *const *argument){
 		}
 	}
 	{
-		const uint32 valueList = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE /*! | XCB_EVENT_MASK_EXPOSURE */;
+		const uint32 valueList = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE;
 		xcb_change_window_attributes(connection, (*screen).root, XCB_CW_EVENT_MASK, &valueList);
 		xcb_composite_redirect_subwindows(connection, (*screen).root, XCB_COMPOSITE_REDIRECT_MANUAL);
 	}
 
 
 
-
-
-
+	{
+		xcb_intern_atom_reply_t *reply = xcb_wait_for_reply(connection, xcb_intern_atom_unchecked(connection, false, LITERAL_LENGTH("PIXMAP"), "PIXMAP"), NULL);
+		pixmapAtom = XCB_NONE;
+		if(reply){
+			pixmapAtom = (*reply).atom;
+			free(reply);
+		}
+	}
+	{
+		xcb_intern_atom_reply_t *reply = xcb_wait_for_reply(connection, xcb_intern_atom_unchecked(connection, false, LITERAL_LENGTH("_XROOTPMAP_ID"), "_XROOTPMAP_ID"), NULL);
+		rootPixmapAtom = XCB_NONE;
+		if(reply){
+			rootPixmapAtom = (*reply).atom;
+			free(reply);
+		}
+	}
 
 
 
@@ -559,12 +470,12 @@ int main(const int argumentAmount, const char *const *argument){
 		xcb_randr_monitor_info_iterator_t iterator;
 		if(!(reply = xcb_wait_for_reply(connection, xcb_randr_get_monitors_unchecked(connection, (*screen).root, true), NULL))){
 			monitorAmount = 1;
-			jmp calculateOverlayWindowBooleanValues;
+			jmp storeMonitorsExit;
 		}
 		monitorAmount = (*(xcb_randr_get_monitors_reply_t *)reply).nMonitors;
 		if(!(monitorData = malloc(monitorAmount * sizeof(Monitor)))){
 			free(reply);
-			jmp calculateOverlayWindowBooleanValues;
+			jmp storeMonitorsExit;
 		}
 		iterator = xcb_randr_get_monitors_monitors_iterator(reply);
 		monitorStart = monitorData;
@@ -607,81 +518,27 @@ int main(const int argumentAmount, const char *const *argument){
 			void *temp;
 			if(!(temp = realloc(monitorData, monitorAmount * sizeof(Monitor)))){
 				free(reply);
-				jmp calculateOverlayWindowBooleanValues;
+				jmp storeMonitorsExit;
 			}
 			monitorData = temp;
 		}
 		monitorStart = monitorData;
 		monitorWall = monitorStart + monitorAmount;
 		free(reply);
-		jmp calculateOverlayWindowBooleanValues;
+		jmp storeMonitorsExit;
 	}
-	calculateOverlayWindowBooleanValues:{
-		uint i = 0;
-		uint pixelTotal = 0;
-		while(i < monitorAmount){
-			pixelTotal += (*(monitorStart + i)).w * (*(monitorStart + i)).h;
-			inc i;
-		}
-		pixelsToDraw = (*screen).width_in_pixels * (*screen).height_in_pixels;
-		wallpaperTruthTableStart = malloc(pixelsToDraw * sizeof(bool));
-		if(pixelTotal < pixelsToDraw){
+	storeMonitorsExit:{}
 
 
 
-			/*!
-				when monitors overlap:
-
-				1. double for loop that checks all monitors with all monitors
-				2. check where the two monitors overlap and remove the area from one of the monitors
-
-				all in all, we don't really view monitors as distinct devices that actually do something but rather just part of the single screen we draw on
-			*/
-
-
-
-			/*! pixelsToDraw = pixelTotal; */
-		}
+	clientStart = malloc(clientSize * sizeof(Client));
+	if(!clientStart){
+		fprintf(stdout, "no clientStart\n");
 	}
-
-
-
-	{
-		overlaygc = xcb_generate_id(connection);
-		width = (*screen).width_in_pixels;
-		height = (*screen).height_in_pixels;
-		if(!(data = malloc(width * height * sizeof(uint32)))){
-			fprintf(stdout, "no wallpaper data\n");
-		}
-		xcb_create_gc(connection, overlaygc, (*screen).root, XCB_NONE, NULL);
-	}
-
-
-
-	{
-		xcb_intern_atom_reply_t *reply = xcb_wait_for_reply(connection, xcb_intern_atom_unchecked(connection, false, strlen("_XROOTPMAP_ID"), "_XROOTPMAP_ID"), NULL);
-		rootPixmapAtom = XCB_NONE;
-		if(reply){
-			rootPixmapAtom = (*reply).atom;
-			free(reply);
-		}
-		if(rootPixmapAtom){
-			xcb_get_property_reply_t *reply = xcb_wait_for_reply(connection, xcb_get_property_unchecked(connection, false, (*screen).root, rootPixmapAtom, XCB_ATOM_PIXMAP, 0, 1), NULL);
-			if(reply){
-				wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply);
-				free(reply);
-				if(wallpaperPixmap){
-					void *pd = xcb_wait_for_reply(connection, xcb_get_image_unchecked(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, wallpaperPixmap, 0, 0, width, height, -1), NULL);
-					if(pd){
-						pixmapData = (void *)xcb_get_image_data(pd);
-					}else{
-						fprintf(stdout, "problem\n");
-					}
-				}
-			}
-		}else{
-			fprintf(stdout, "problem\n");
-		}
+	clientWall = clientStart + clientAllocated;
+	orderedClientOffsetStart = malloc(clientSize * sizeof(uint));
+	if(!orderedClientOffsetStart){
+		fprintf(stdout, "no orderedClientOffsetStart\n");
 	}
 
 
@@ -689,55 +546,6 @@ int main(const int argumentAmount, const char *const *argument){
 	{
 		const uint32 stackMode = XCB_STACK_MODE_BELOW;
 		xcb_configure_window(connection, overlayWindow, XCB_CONFIG_WINDOW_STACK_MODE, &stackMode);
-	}
-	{
-		xcb_query_extension_reply_t *const compositeReply = xcb_wait_for_reply(connection, xcb_query_extension_unchecked(connection, LITERAL_LENGTH("Composite"), "Composite"), NULL);
-		xcb_query_extension_reply_t *const damageReply = xcb_wait_for_reply(connection, xcb_query_extension_unchecked(connection, LITERAL_LENGTH("DAMAGE"), "DAMAGE"), NULL);
-		xcb_query_extension_reply_t *const randrReply = xcb_wait_for_reply(connection, xcb_query_extension_unchecked(connection, LITERAL_LENGTH("RANDR"), "RANDR"), NULL);
-		xcb_query_extension_reply_t *const xfixesReply = xcb_wait_for_reply(connection, xcb_query_extension_unchecked(connection, LITERAL_LENGTH("XFIXES"), "XFIXES"), NULL);
-		if(!compositeReply or !(*compositeReply).present){
-			fprintf(stdout, "composite extension not available\n");
-		}else{
-			free(compositeReply);
-		}
-		if(!damageReply or !(*damageReply).present){
-			fprintf(stdout, "damage extension not available\n");
-		}else{
-			const xcb_query_extension_reply_t *const reply = xcb_get_extension_data(connection, &xcb_damage_id);
-			damageBaseEvent = 0;
-			damageBaseError = 0;
-			if(reply and (*reply).present){
-				damageBaseEvent = (*reply).first_event;
-				damageBaseError = (*reply).first_error;
-			}
-			free(damageReply);
-		}
-		if(!randrReply or !(*randrReply).present){
-			fprintf(stdout, "randr extension not available\n");
-		}else{
-			free(randrReply);
-		}
-		if(!xfixesReply or !(*xfixesReply).present){
-			fprintf(stdout, "xfixes extension not available\n");
-		}else{
-			free(xfixesReply);
-		}
-	}
-	{
-		xcb_damage_query_version_reply_t *reply = xcb_wait_for_reply(connection, xcb_damage_query_version_unchecked(connection, XCB_DAMAGE_MAJOR_VERSION, XCB_DAMAGE_MINOR_VERSION), NULL);
-		if(reply){
-			free(reply);
-		}else{
-			fprintf(stdout, "%s: could not query damage extension\n", programName);
-		}
-	}
-	{
-		xcb_xfixes_query_version_reply_t *reply = xcb_wait_for_reply(connection, xcb_xfixes_query_version_unchecked(connection, XCB_XFIXES_MAJOR_VERSION, XCB_XFIXES_MINOR_VERSION), NULL);
-		if(reply){
-			free(reply);
-		}else{
-			fprintf(stdout, "%s: could not query xfixes extension\n", programName);
-		}
 	}
 
 
@@ -839,8 +647,7 @@ int main(const int argumentAmount, const char *const *argument){
 		xcb_visualid_t visual = (*screen).root_visual;
 		xcb_render_pictvisual_t *current = visualStart;
 		xcb_render_pictvisual_t *wall = visualStart + visualAmount;
-		xcb_render_pictformat_t rootFormat = XCB_NONE;
-		uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
+		rootFormat = XCB_NONE;
 		while(current < wall){
 			if((*current).visual == visual){
 				rootFormat = (*current).format;
@@ -848,130 +655,93 @@ int main(const int argumentAmount, const char *const *argument){
 			}
 			inc current;
 		}
-		pictureDest = xcb_generate_id(connection);
-		xcb_render_create_picture(connection, pictureDest, (*screen).root, rootFormat, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
 	}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
 	{
-		xcb_query_tree_reply_t *const treeReply = xcb_wait_for_reply(connection, xcb_query_tree_unchecked(connection, (*screen).root), NULL);
-		if(treeReply){
-			const uint amount = xcb_query_tree_children_length(treeReply);
-			const xcb_window_t *const windowStart = xcb_query_tree_children(treeReply);
-			const xcb_window_t *windowCurrent = windowStart;
-			const xcb_window_t *const windowWall = windowStart + amount;
-			Client *clientCurrent = clientStart;
-			getWindowAttributes0Loop:{
-				if(*windowCurrent != overlayWindow){
-					xcb_get_window_attributes_reply_t *attributeReply = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, *windowCurrent), NULL);
-					if(attributeReply){
-						if((*attributeReply)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
-							xcb_get_geometry_reply_t *const geometryReply = xcb_wait_for_reply(connection, xcb_get_geometry_unchecked(connection, *windowCurrent), NULL);
-							if(clientAllocated == clientSize){
-								void *temp;
-								clientSize += CLIENT_BLOCK_SIZE;
-								if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
-									exit(1);
-								}
-								clientStart = temp;
-								clientCurrent = clientStart + clientAllocated;
-							}
-							(*clientCurrent).window = *windowCurrent;
-							(*clientCurrent).damage = xcb_generate_id(connection);
-							(*clientCurrent).visual = (*attributeReply).visual;
-							(*clientCurrent).format = XCB_NONE;
-							(*clientCurrent).picture = XCB_NONE;
-							if(geometryReply){
-								(*clientCurrent).x = (*geometryReply).x;
-								(*clientCurrent).y = (*geometryReply).y;
-								(*clientCurrent).width = (*geometryReply).width;
-								(*clientCurrent).height = (*geometryReply).height;
-								free(geometryReply);
-							}else{
-								(*clientCurrent).x = (*screen).width_in_pixels;
-								(*clientCurrent).y = (*screen).height_in_pixels;
-								(*clientCurrent).width = 0;
-								(*clientCurrent).height = 0;
-							}
-							(*clientCurrent).imageX = 0;
-							(*clientCurrent).imageY = 0;
-							(*clientCurrent).viewableX = (*clientCurrent).x;
-							(*clientCurrent).viewableY = (*clientCurrent).y;
-							(*clientCurrent).viewableWidth = (*clientCurrent).width;
-							(*clientCurrent).viewableHeight = (*clientCurrent).height;
-							(*clientCurrent).index = clientAllocated;
-							(*clientCurrent).mappedIndex = -1;
-							if((*clientCurrent).viewableX < 0){
-								(*clientCurrent).imageX = -(*clientCurrent).x;
-								(*clientCurrent).viewableWidth += (*clientCurrent).viewableX;
-								(*clientCurrent).viewableX = 0;
-							}
-							if((*clientCurrent).viewableY < 0){
-								(*clientCurrent).imageY = -(*clientCurrent).y;
-								(*clientCurrent).viewableHeight += (*clientCurrent).viewableY;
-								(*clientCurrent).viewableY = 0;
-							}
-							if((*clientCurrent).viewableX + (*clientCurrent).viewableWidth > width){
-								(*clientCurrent).viewableWidth -= (*clientCurrent).viewableX + (*clientCurrent).viewableWidth - width;
-							}
-							if((*clientCurrent).viewableY + (*clientCurrent).viewableHeight > height){
-								(*clientCurrent).viewableHeight -= (*clientCurrent).viewableY + (*clientCurrent).viewableHeight - height;
-							}
-							if((*attributeReply).map_state == XCB_MAP_STATE_VIEWABLE){
-								(*clientCurrent).mappedIndex = mappedClientAllocated;
-								if(mappedClientAllocated == mappedClientSize){
-									void *temp;
-									mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
-									if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(uint)))){
-										exit(1);
-									}
-									mappedClientStart = temp;
-								}
-								*(mappedClientStart + mappedClientAllocated) = clientAllocated;
-								inc mappedClientAllocated;
-							}
-							xcb_change_window_attributes(connection, *windowCurrent, XCB_CW_EVENT_MASK, &windowValueList);
-							xcb_damage_create(connection, (*clientCurrent).damage, *windowCurrent, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
-							inc clientCurrent;
-							inc clientAllocated;
-						}
-						free(attributeReply);
-					}
-				}
-				if(inc windowCurrent < windowWall){
-					jmp getWindowAttributes0Loop;
+		const uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
+		bufferPixmap = xcb_generate_id(connection);
+		rootPicture = xcb_generate_id(connection);
+		bufferPicture = xcb_generate_id(connection);
+		xcb_create_pixmap(connection, (*screen).root_depth, bufferPixmap, (*screen).root, (*screen).width_in_pixels, (*screen).height_in_pixels);
+		xcb_render_create_picture(connection, bufferPicture, bufferPixmap, rootFormat, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
+		xcb_render_create_picture(connection, rootPicture, overlayWindow, rootFormat, XCB_NONE, NULL);
+	}
+
+
+
+	if(rootPixmapAtom){
+		xcb_get_property_reply_t *const reply = xcb_wait_for_reply(connection, xcb_get_property_unchecked(connection, false, (*screen).root, rootPixmapAtom, XCB_ATOM_PIXMAP, 0, 1), NULL);
+		if(reply){
+			xcb_pixmap_t pixmap;
+			if((*reply).type != pixmapAtom){
+				fprintf(stdout, "%s: root pixmap is not of type pixmap\n", programName);
+			}else{
+				pixmap = *(xcb_pixmap_t *)xcb_get_property_value(reply);
+				if(pixmap){
+					const xcb_gcontext_t gc = xcb_generate_id(connection);
+					const uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
+					wallpaperPixmap = xcb_generate_id(connection);
+					wallpaperPicture = xcb_generate_id(connection);
+					xcb_create_gc(connection, gc, pixmap, XCB_NONE, NULL);
+					xcb_create_pixmap(connection, (*screen).root_depth, wallpaperPixmap, (*screen).root, (*screen).width_in_pixels, (*screen).height_in_pixels);
+					xcb_copy_area(connection, pixmap, wallpaperPixmap, gc, 0, 0, 0, 0, (*screen).width_in_pixels, (*screen).height_in_pixels);
+					xcb_free_gc(connection, gc);
+					xcb_render_create_picture(connection, wallpaperPicture, wallpaperPixmap, rootFormat, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
 				}
 			}
-			clientWall = clientStart + clientAllocated;
-			free(treeReply);
+			free(reply);
 		}
 	}
+
+
+
+
+
+
+
+
+
+	queryTree();
+	if(treeReply){
+		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
+		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
+		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
+
+
+
+		/*! good idea if we calculate it's viewable area? */
+
+		/*! if(addClient((*screen).root)){
+			*orderedClientOffsetCurrent = orderedClientOffsetCurrent - orderedClientOffsetStart;
+			inc orderedClientOffsetCurrent;
+		} */
+
+
+
+		addExistingClientLoop:{
+			if(addClient(*windowCurrent)){
+				*orderedClientOffsetCurrent = orderedClientOffsetCurrent - orderedClientOffsetStart;
+				inc orderedClientOffsetCurrent;
+			}
+			if(inc windowCurrent < windowWall){
+				jmp addExistingClientLoop;
+			}
+		}
+	}
+	clientWall = clientStart + clientAllocated;
 	calculateViewableWindowSizes();
+
+
+
+
+
+
+
+
+
+	/*! draw everything once here */
 
 
 
@@ -984,11 +754,6 @@ int main(const int argumentAmount, const char *const *argument){
 	eventLoop:{
 		xcb_flush(connection);
 		free(event0);
-		if(event1){
-			event0 = event1;
-			event1 = NULL;
-			jmp switchEvents;
-		}
 		event0 = NULL;
 		jmp waitForEventLoop;
 	}
@@ -1000,1079 +765,355 @@ int main(const int argumentAmount, const char *const *argument){
 			printConnectionError();
 			jmp eventLoopExit;
 		}
-
-
-
-/*!
-		calculateWallpaperStrips();
-		printWallpaper();
-*/
-
-
-
 		jmp eventLoop;
 	}
 	switchEvents:{
-		#define XCB_ONE /*------------------------*/ (1)
-		if(false){
-			printEvent();
-		}
-		switch (*event0).response_type & ~0x80 over
-			to XCB_NONE: /*-----------------------*/ jmp errorEvent;
-			to XCB_ONE: /*------------------------*/ jmp unexpectedEvent;
-			to XCB_KEY_PRESS: /*------------------*/ jmp unexpectedEvent;
-			to XCB_KEY_RELEASE: /*----------------*/ jmp unexpectedEvent;
-			to XCB_BUTTON_PRESS: /*---------------*/ jmp unexpectedEvent;
-			to XCB_BUTTON_RELEASE: /*-------------*/ jmp unexpectedEvent;
-			to XCB_MOTION_NOTIFY: /*--------------*/ jmp unexpectedEvent;
-			to XCB_ENTER_NOTIFY: /*---------------*/ jmp unexpectedEvent;
-			to XCB_LEAVE_NOTIFY: /*---------------*/ jmp unexpectedEvent;
-			to XCB_FOCUS_IN: /*-------------------*/ jmp unexpectedEvent;
-			to XCB_FOCUS_OUT: /*------------------*/ jmp unexpectedEvent;
-			to XCB_KEYMAP_NOTIFY: /*--------------*/ jmp unexpectedEvent;
-			to XCB_EXPOSE: /*---------------------*/ jmp unexpectedEvent;
-			to XCB_GRAPHICS_EXPOSURE: /*----------*/ jmp unexpectedEvent;
-			to XCB_NO_EXPOSURE: /*----------------*/ jmp unexpectedEvent;
-			to XCB_VISIBILITY_NOTIFY: /*----------*/ jmp visibilityNotifyEvent;
-			to XCB_CREATE_NOTIFY: /*--------------*/ jmp createNotifyEvent;
-			to XCB_DESTROY_NOTIFY: /*-------------*/ jmp destroyNotifyEvent;
-			to XCB_UNMAP_NOTIFY: /*---------------*/ jmp unmapNotifyEvent;
-			to XCB_MAP_NOTIFY: /*-----------------*/ jmp mapNotifyEvent;
-			to XCB_MAP_REQUEST: /*----------------*/ jmp unexpectedEvent;
-			to XCB_REPARENT_NOTIFY: /*------------*/ jmp reparentNotifyEvent;
-			to XCB_CONFIGURE_NOTIFY: /*-----------*/ jmp configureNotifyEvent;
-			to XCB_CONFIGURE_REQUEST: /*----------*/ jmp unexpectedEvent;
-			to XCB_GRAVITY_NOTIFY: /*-------------*/ jmp unexpectedEvent;
-			to XCB_RESIZE_REQUEST: /*-------------*/ jmp unexpectedEvent;
-			to XCB_CIRCULATE_NOTIFY: /*-----------*/ jmp circulateNotifyEvent;
-			to XCB_CIRCULATE_REQUEST: /*----------*/ jmp unexpectedEvent;
-			to XCB_PROPERTY_NOTIFY: /*------------*/ jmp propertyNotifyEvent;
-			to XCB_SELECTION_CLEAR: /*------------*/ jmp unexpectedEvent;
-			to XCB_SELECTION_REQUEST: /*----------*/ jmp unexpectedEvent;
-			to XCB_SELECTION_NOTIFY: /*-----------*/ jmp unexpectedEvent;
-			to XCB_COLORMAP_NOTIFY: /*------------*/ jmp unexpectedEvent;
-			to XCB_CLIENT_MESSAGE: /*-------------*/ jmp unexpectedEvent;
-			to XCB_MAPPING_NOTIFY: /*-------------*/ jmp eventLoop;
-			to XCB_GE_GENERIC: /*-----------------*/ jmp unexpectedEvent;
-			off: /*-------------------------------*/ jmp extensionEvent;
+		#define XCB_ONE /*-*/ (1)
+		switch (*event0).response_type & ~b(10000000) over
+			to XCB_NONE: /*--------------*/ jmp errorEvent;
+			to XCB_ONE: /*---------------*/ jmp unexpectedEvent;
+			to XCB_KEY_PRESS: /*---------*/ jmp unexpectedEvent;
+			to XCB_KEY_RELEASE: /*-------*/ jmp unexpectedEvent;
+			to XCB_BUTTON_PRESS: /*------*/ jmp unexpectedEvent;
+			to XCB_BUTTON_RELEASE: /*----*/ jmp unexpectedEvent;
+			to XCB_MOTION_NOTIFY: /*-----*/ jmp unexpectedEvent;
+			to XCB_ENTER_NOTIFY: /*------*/ jmp unexpectedEvent;
+			to XCB_LEAVE_NOTIFY: /*------*/ jmp unexpectedEvent;
+			to XCB_FOCUS_IN: /*----------*/ jmp unexpectedEvent;
+			to XCB_FOCUS_OUT: /*---------*/ jmp unexpectedEvent;
+			to XCB_KEYMAP_NOTIFY: /*-----*/ jmp unexpectedEvent;
+			to XCB_EXPOSE: /*------------*/ jmp unexpectedEvent;
+			to XCB_GRAPHICS_EXPOSURE: /*-*/ jmp unexpectedEvent;
+			to XCB_NO_EXPOSURE: /*-------*/ jmp unexpectedEvent;
+			to XCB_VISIBILITY_NOTIFY: /*-*/ jmp visibilityNotifyEvent;
+			to XCB_CREATE_NOTIFY: /*-----*/ jmp createNotifyEvent;
+			to XCB_DESTROY_NOTIFY: /*----*/ jmp destroyNotifyEvent;
+			to XCB_UNMAP_NOTIFY: /*------*/ jmp unmapNotifyEvent;
+			to XCB_MAP_NOTIFY: /*--------*/ jmp mapNotifyEvent;
+			to XCB_MAP_REQUEST: /*-------*/ jmp unexpectedEvent;
+			to XCB_REPARENT_NOTIFY: /*---*/ jmp reparentNotifyEvent;
+			to XCB_CONFIGURE_NOTIFY: /*--*/ jmp configureNotifyEvent;
+			to XCB_CONFIGURE_REQUEST: /*-*/ jmp unexpectedEvent;
+			to XCB_GRAVITY_NOTIFY: /*----*/ jmp unexpectedEvent;
+			to XCB_RESIZE_REQUEST: /*----*/ jmp unexpectedEvent;
+			to XCB_CIRCULATE_NOTIFY: /*--*/ jmp circulateNotifyEvent;
+			to XCB_CIRCULATE_REQUEST: /*-*/ jmp unexpectedEvent;
+			to XCB_PROPERTY_NOTIFY: /*---*/ jmp propertyNotifyEvent;
+			to XCB_SELECTION_CLEAR: /*---*/ jmp unexpectedEvent;
+			to XCB_SELECTION_REQUEST: /*-*/ jmp unexpectedEvent;
+			to XCB_SELECTION_NOTIFY: /*--*/ jmp unexpectedEvent;
+			to XCB_COLORMAP_NOTIFY: /*---*/ jmp unexpectedEvent;
+			to XCB_CLIENT_MESSAGE: /*----*/ jmp unexpectedEvent;
+			to XCB_MAPPING_NOTIFY: /*----*/ jmp eventLoop;
+			to XCB_GE_GENERIC: /*--------*/ jmp unexpectedEvent;
+			off: /*----------------------*/ jmp extensionEvent;
 		end
 		#undef  XCB_ONE
 	}
 	extensionEvent:{
-		if(((*event0).response_type & ~128) == damageBaseEvent + XCB_DAMAGE_NOTIFY){
+		if(((*event0).response_type & ~b(10000000)) == damageBaseEvent + XCB_DAMAGE_NOTIFY){
 			jmp damageNotifyEvent;
 		}
-		if(((*event0).response_type & ~128) == damageBaseError + XCB_DAMAGE_BAD_DAMAGE){
+		if(((*event0).response_type & ~b(10000000)) == randrBaseEvent + XCB_RANDR_SCREEN_CHANGE_NOTIFY){
+			jmp randrNotifyEvent;
+		}
+		if(((*event0).response_type & ~b(10000000)) == damageBaseError + XCB_DAMAGE_BAD_DAMAGE){
 			jmp badDamageError;
+		}
+		if(((*event0).response_type & ~b(10000000)) == randrBaseError){
+			jmp randrNotifyError;
 		}
 		jmp unexpectedEvent;
 	}
-	visibilityNotifyEvent:{
-		Client *const client = findWindow((*(xcb_visibility_notify_event_t *)event0).window);
-		if(!client){
-			jmp eventLoop;
-		}
-		if((*(xcb_visibility_notify_event_t *)event0).state == XCB_VISIBILITY_FULLY_OBSCURED){
-			unmapWindow(client);
-			calculateViewableWindowSizes();
-			jmp eventLoop;
-		}
-		mapWindow(client);
-		calculateViewableWindowSizes();
-		jmp eventLoop;
-	}
-	createNotifyEvent:{
-
-
-
-		/*! buggy, window shown at (0, 0) sometimes, fix immediately */
-
-
-
-#ifdef a
-		const xcb_window_t window = (*(xcb_create_notify_event_t *)event0).window;
-		xcb_get_window_attributes_reply_t *reply;
-		Client client;
-		bool viewable = false;
-
-
-
-		if(window == overlayWindow){
-			jmp eventLoop;
-		}
-		if(!(reply = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, window), NULL))){
-			jmp eventLoop;
-		}
-		if((*reply)._class != XCB_WINDOW_CLASS_INPUT_OUTPUT){
-			free(reply);
-			jmp eventLoop;
-		}
-		if((*reply).map_state == XCB_MAP_STATE_VIEWABLE){
-			viewable = true;
-		}
-		free(reply);
-		xcb_change_window_attributes(connection, window, XCB_CW_EVENT_MASK, &windowValueList);
-
-
-
-		if(clientAllocated == clientSize){
-			void *temp;
-			clientSize += CLIENT_BLOCK_SIZE;
-			if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
-				exit(1);
-			}
-			clientStart = temp;
-			clientWall = clientStart + clientAllocated;
-		}
-
-
-
-		client.window = window;
-		client.x = (*(xcb_create_notify_event_t *)event0).x;
-		client.y = (*(xcb_create_notify_event_t *)event0).y;
-		client.width = (*(xcb_create_notify_event_t *)event0).width;
-		client.height = (*(xcb_create_notify_event_t *)event0).height;
-		client.imageX = 0;
-		client.imageY = 0;
-		client.viewableX = client.x;
-		client.viewableY = client.y;
-		client.viewableWidth = client.width;
-		client.viewableHeight = client.height;
-		client.index = clientAllocated;
-		client.mappedIndex = -1;
-		if(client.viewableX < 0){
-			client.imageX = -client.x;
-			client.viewableWidth += client.viewableX;
-			client.viewableX = 0;
-		}
-		if(client.viewableY < 0){
-			client.imageY = -client.y;
-			client.viewableHeight += client.viewableY;
-			client.viewableY = 0;
-		}
-		if(client.viewableX + client.viewableWidth > width){
-			client.viewableWidth -= client.viewableX + client.viewableWidth - width;
-		}
-		if(client.viewableY + client.viewableHeight > height){
-			client.viewableHeight -= client.viewableY + client.viewableHeight - height;
-		}
-		if(viewable){
-			client.mappedIndex = mappedClientAllocated;
-			if(mappedClientAllocated == mappedClientSize){
-				void *temp;
-				mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
-				if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(uint)))){
-					exit(1);
-				}
-				mappedClientStart = temp;
-			}
-			*(mappedClientStart + mappedClientAllocated) = clientAllocated;
-			inc mappedClientAllocated;
-		}
-		inc clientAllocated;
-		inc clientWall;
-
-
-
-
-
-
-
-
-
-		*(clientStart + clientAllocated - 1) = client;
-
-
-
-
-
-
-
-
-
-#endif
-
-
-
-		Client *clientCurrent = clientStart;
-		while(clientCurrent < clientWall){
-			xcb_damage_destroy(connection, (*clientCurrent).damage);
-			inc clientCurrent;
-		}
-
-
-
-		clientAllocated = 0;
-		mappedClientAllocated = 0;
-		{
-			xcb_query_tree_reply_t *const treeReply = xcb_wait_for_reply(connection, xcb_query_tree_unchecked(connection, (*screen).root), NULL);
-			if(treeReply){
-				const uint amount = xcb_query_tree_children_length(treeReply);
-				const xcb_window_t *const windowStart = xcb_query_tree_children(treeReply);
-				const xcb_window_t *windowCurrent = windowStart;
-				const xcb_window_t *const windowWall = windowStart + amount;
-				Client *clientCurrent = clientStart;
-				getWindowAttributes1Loop:{
-					if(*windowCurrent != overlayWindow){
-						xcb_get_window_attributes_reply_t *attributeReply = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, *windowCurrent), NULL);
-						if(attributeReply){
-							if((*attributeReply)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
-								xcb_get_geometry_reply_t *const geometryReply = xcb_wait_for_reply(connection, xcb_get_geometry_unchecked(connection, *windowCurrent), NULL);
-								if(clientAllocated == clientSize){
-									void *temp;
-									clientSize += CLIENT_BLOCK_SIZE;
-									if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
-										exit(1);
-									}
-									clientStart = temp;
-									clientCurrent = clientStart + clientAllocated;
-								}
-								(*clientCurrent).window = *windowCurrent;
-								(*clientCurrent).damage = xcb_generate_id(connection);
-								(*clientCurrent).visual = (*attributeReply).visual;
-								(*clientCurrent).format = XCB_NONE;
-								(*clientCurrent).picture = XCB_NONE;
-								if(geometryReply){
-									(*clientCurrent).x = (*geometryReply).x;
-									(*clientCurrent).y = (*geometryReply).y;
-									(*clientCurrent).width = (*geometryReply).width;
-									(*clientCurrent).height = (*geometryReply).height;
-									free(geometryReply);
-								}else{
-									(*clientCurrent).x = (*screen).width_in_pixels;
-									(*clientCurrent).y = (*screen).height_in_pixels;
-									(*clientCurrent).width = 0;
-									(*clientCurrent).height = 0;
-								}
-								(*clientCurrent).imageX = 0;
-								(*clientCurrent).imageY = 0;
-								(*clientCurrent).viewableX = (*clientCurrent).x;
-								(*clientCurrent).viewableY = (*clientCurrent).y;
-								(*clientCurrent).viewableWidth = (*clientCurrent).width;
-								(*clientCurrent).viewableHeight = (*clientCurrent).height;
-								(*clientCurrent).index = clientAllocated;
-								(*clientCurrent).mappedIndex = -1;
-								if((*clientCurrent).viewableX < 0){
-									(*clientCurrent).imageX = -(*clientCurrent).x;
-									(*clientCurrent).viewableWidth += (*clientCurrent).viewableX;
-									(*clientCurrent).viewableX = 0;
-								}
-								if((*clientCurrent).viewableY < 0){
-									(*clientCurrent).imageY = -(*clientCurrent).y;
-									(*clientCurrent).viewableHeight += (*clientCurrent).viewableY;
-									(*clientCurrent).viewableY = 0;
-								}
-								if((*clientCurrent).viewableX + (*clientCurrent).viewableWidth > width){
-									(*clientCurrent).viewableWidth -= (*clientCurrent).viewableX + (*clientCurrent).viewableWidth - width;
-								}
-								if((*clientCurrent).viewableY + (*clientCurrent).viewableHeight > height){
-									(*clientCurrent).viewableHeight -= (*clientCurrent).viewableY + (*clientCurrent).viewableHeight - height;
-								}
-								if((*attributeReply).map_state == XCB_MAP_STATE_VIEWABLE){
-									(*clientCurrent).mappedIndex = mappedClientAllocated;
-									if(mappedClientAllocated == mappedClientSize){
-										void *temp;
-										mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
-										if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(uint)))){
-											exit(1);
-										}
-										mappedClientStart = temp;
-									}
-									*(mappedClientStart + mappedClientAllocated) = clientAllocated;
-									inc mappedClientAllocated;
-								}
-								xcb_change_window_attributes(connection, *windowCurrent, XCB_CW_EVENT_MASK, &windowValueList);
-								xcb_damage_create(connection, (*clientCurrent).damage, *windowCurrent, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
-								inc clientCurrent;
-								inc clientAllocated;
-							}
-							free(attributeReply);
-						}
-					}
-					if(inc windowCurrent < windowWall){
-						jmp getWindowAttributes1Loop;
-					}
-				}
-				clientWall = clientStart + clientAllocated;
-				free(treeReply);
-			}
-		}
-		calculateViewableWindowSizes();
-
-
-
-		jmp eventLoop;
-	}
-	destroyNotifyEvent:{
-		Client *const client = findWindow((*(xcb_destroy_notify_event_t *)event0).window);
-		if(!client){
-			jmp eventLoop;
-		}
-		xcb_damage_destroy(connection, (*client).damage);
-		unmapWindow(client);
-
-
-
-		/*! remove destroyed client from list */
-		{
-			Client *clientCurrent = clientStart + (*client).index;
-			dec clientWall;
-			dec clientAllocated;
-			while(clientCurrent < clientWall){
-				*clientCurrent = *(clientCurrent + 1);
-				dec (*clientCurrent).index;
-				inc clientCurrent;
-			}
-		}
-
-
-
-		/*! update mapped client indexes */
-		{
-			Client *clientCurrent = clientStart;
-			uint *mappedClientCurrent = mappedClientStart;
-			uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
-			while(clientCurrent < clientWall and mappedClientCurrent < mappedClientWall){
-				if((*clientCurrent).mappedIndex != -1){
-					*mappedClientCurrent = (*clientCurrent).index;
-					inc mappedClientCurrent;
-				}
-				inc clientCurrent;
-			}
-		}
-
-
-
-		/*! {
-			uint *mappedClientCurrent = mappedClientStart;
-			uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
-			while(mappedClientCurrent < mappedClientWall){
-				fprintf(stdout, "window %u\t\tindex %u\t\tmappedIndex %i\n", (*(clientStart + *mappedClientCurrent)).window, (*(clientStart + *mappedClientCurrent)).index, (*(clientStart + *mappedClientCurrent)).mappedIndex);
-				inc mappedClientCurrent;
-			}
-		} */
-
-
-
-		calculateViewableWindowSizes();
-
-
-
-		jmp eventLoop;
-	}
-	unmapNotifyEvent:{
-		Client *const client = findWindow((*(xcb_unmap_notify_event_t *)event0).window);
+	visibilityNotifyEvent: fprintf(stdout, "visibility notify\n"); {
+		#define event0 /*-*/ ((xcb_visibility_notify_event_t *)event0)
+		Client *const client = findClient((*event0).window);
 		if(client){
-			unmapWindow(client);
-
-
-
-			calculateViewableWindowSizes();
-
-
-
-		}
-		jmp eventLoop;
-	}
-	mapNotifyEvent:{
-		Client *const client = findWindow((*(xcb_map_notify_event_t *)event0).window);
-		if(client){
-			mapWindow(client);
-
-
-
-			calculateViewableWindowSizes();
-
-
-
-		}
-		jmp eventLoop;
-	}
-	reparentNotifyEvent:{
-		if((*(xcb_reparent_notify_event_t *)event0).parent == (*screen).root){
-			jmp createNotifyEvent;
-		}
-		jmp destroyNotifyEvent;
-	}
-	configureNotifyEvent:{
-		Client *const client = findWindow((*(xcb_configure_notify_event_t *)event0).window);
-		if(!client){
-			jmp eventLoop;
-		}
-
-
-
-		/*! Client temp = *client;
-		int index = -1; */
-
-
-
-		(*client).x = (*(xcb_configure_notify_event_t *)event0).x;
-		(*client).y = (*(xcb_configure_notify_event_t *)event0).y;
-		(*client).width = (*(xcb_configure_notify_event_t *)event0).width;
-		(*client).height = (*(xcb_configure_notify_event_t *)event0).height;
-		(*client).imageX = 0;
-		(*client).imageY = 0;
-		(*client).viewableX = (*client).x;
-		(*client).viewableY = (*client).y;
-		(*client).viewableWidth = (*client).width;
-		(*client).viewableHeight = (*client).height;
-		if((*client).viewableX < 0){
-			(*client).imageX = -(*client).x;
-			(*client).viewableWidth += (*client).viewableX;
-			(*client).viewableX = 0;
-		}
-		if((*client).viewableY < 0){
-			(*client).imageY = -(*client).y;
-			(*client).viewableHeight += (*client).viewableY;
-			(*client).viewableY = 0;
-		}
-		if((*client).viewableX + (*client).viewableWidth > width){
-			(*client).viewableWidth -= (*client).viewableX + (*client).viewableWidth - width;
-		}
-		if((*client).viewableY + (*client).viewableHeight > height){
-			(*client).viewableHeight -= (*client).viewableY + (*client).viewableHeight - height;
-		}
-
-
-
-
-
-
-
-
-
-		/*! {
-			if((*(xcb_configure_notify_event_t *)event0).above_sibling == XCB_NONE){
-				Client *clientCurrent = clientStart + (*client).index;
-				Client temp = *clientCurrent;
-				temp.index = 0;
-				while(clientCurrent > clientStart){
-					*clientCurrent = *(clientCurrent - 1);
-					inc (*clientCurrent).index;
-					dec clientCurrent;
-				}
-				*(clientCurrent - 1) = temp;
-
-
-
+			if((*event0).state == XCB_VISIBILITY_FULLY_OBSCURED){
+				unmapWindow(client);
 			}else{
-				const xcb_window_t sibling = (*(xcb_configure_notify_event_t *)event0).above_sibling;
-				Client *clientCurrent = clientStart;
-
-
-				fprintf(stdout, "%x should be n + 1 on %x\n", temp.window, sibling);
-
-
-
-				while(clientCurrent < clientWall){
-					if((*clientCurrent).window == sibling){
-						index = (*clientCurrent).index;
-						brk;
-					}
-					inc clientCurrent;
-				}
-				if(index == -1){
-					fprintf(stdout, "\t\t\t\t\t\t\t\t\tdon't know this one\n");
-					jmp eventLoop;
-				}
-
-
-
-				fprintf(stdout, "temp index/index: %u, %u\n", temp.index, index);
-				if(temp.index == index + 1){
-					fprintf(stdout, "\t\t\tno reordering needed\n");
-
-
-
-
-
-
-
-
-
-				}elif(temp.index < index + 1){
-					fprintf(stdout, "\t\t\tnormal case 1\n");
-
-
-
-					Client *current = clientStart + temp.index;
-					Client *wall = clientStart + index;
-					while(current < wall){
-						*current = *(current + 1);
-						dec (*current).index;
-						inc current;
-					}
-					temp.index = current - clientStart;
-					*current = temp;
-
-
-
-
-
-
-
-
-
-				}elif(temp.index > index + 1){
-					fprintf(stdout, "\t\t\tnormal case 2\n");
-
-
-
-					Client *current = clientStart + temp.index;
-					Client *start = clientStart + index + 1;
-					while(current > start){
-						*current = *(current - 1);
-						inc (*current).index;
-						dec current;
-					}
-					temp.index = current - clientStart;
-					*current = temp;
-
-
-
-
-
-				
-
-
-
-				
-
-				}else{
-					fprintf(stdout, "\t\t\tthere's another case? %u == %u\n", temp.index, index);
-				}
-
-
-
-
-
-
-
-
-
+				mapWindow(client);
 			}
-
-
-
-			{
-				Client *clientCurrent = clientStart;
-				uint newMappedIndex = 0;
-				while(clientCurrent < clientWall){
-					if((*clientCurrent).mappedIndex != -1){
-						(*clientCurrent).mappedIndex = newMappedIndex;
-						inc newMappedIndex;
-					}
-					inc clientCurrent;
-				}
-			}
-
-
-
-			{
-				Client *clientCurrent = clientStart;
-				uint counter = 0;
-				while(clientCurrent < clientWall){
-					fprintf(stdout, "%u %x\n", (*clientCurrent).index, (*clientCurrent).window);
-					if((*clientCurrent).index != counter){
-						fprintf(stdout, "shit indexes at %u\n", (*clientCurrent).index);
-					}
-					inc clientCurrent;
-					inc counter;
-				}
-			}
-
-
-
-		}*/
-
-
-
-
-
-
-
-
-
-		/*!{
-			xcb_query_tree_reply_t *const reply = xcb_wait_for_reply(connection, xcb_query_tree_unchecked(connection, (*screen).root), NULL);
-			if(reply){
-				const uint amount = xcb_query_tree_children_length(reply);
-				const xcb_window_t *const windowStart = xcb_query_tree_children(reply);
-				const xcb_window_t *windowCurrent = windowStart;
-				const xcb_window_t *const windowWall = windowStart + amount;
-				Client *clientCurrent = clientStart;
-				xcb_get_window_attributes_reply_t *reply1;
-				getWindowAttributes2Loop:{
-					if(*windowCurrent != overlayWindow and (reply1 = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, *windowCurrent), NULL))){
-						if((*reply1)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
-							if(*windowCurrent != (*clientCurrent).window){
-
-
-
-								fprintf(stdout, "case not right after %lu windows with %x and %x\n", clientCurrent - clientStart, *windowCurrent, (*clientCurrent).window);
-								exit(1);
-
-
-
-							}
-							inc clientCurrent;
-						}
-						free(reply1);
-					}
-					if(inc windowCurrent < windowWall){
-						jmp getWindowAttributes2Loop;
-					}
-				}
-				clientWall = clientStart + clientAllocated;
-				free(reply);
-			}
-		}*/
-
-
-
-
-
-
-
-
-
-		{
-			Client *clientCurrent = clientStart;
-			while(clientCurrent < clientWall){
-				xcb_damage_destroy(connection, (*clientCurrent).damage);
-				inc clientCurrent;
-			}
-		}
-
-
-
-		clientAllocated = 0;
-		mappedClientAllocated = 0;
-		{
-			xcb_query_tree_reply_t *const treeReply = xcb_wait_for_reply(connection, xcb_query_tree_unchecked(connection, (*screen).root), NULL);
-			if(treeReply){
-				const uint amount = xcb_query_tree_children_length(treeReply);
-				const xcb_window_t *const windowStart = xcb_query_tree_children(treeReply);
-				const xcb_window_t *windowCurrent = windowStart;
-				const xcb_window_t *const windowWall = windowStart + amount;
-				Client *clientCurrent = clientStart;
-				getWindowAttributes2Loop:{
-					if(*windowCurrent != overlayWindow){
-						xcb_get_window_attributes_reply_t *attributeReply = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, *windowCurrent), NULL);
-						if(attributeReply){
-							if((*attributeReply)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
-								xcb_get_geometry_reply_t *const geometryReply = xcb_wait_for_reply(connection, xcb_get_geometry_unchecked(connection, *windowCurrent), NULL);
-								if(clientAllocated == clientSize){
-									void *temp;
-									clientSize += CLIENT_BLOCK_SIZE;
-									if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
-										exit(1);
-									}
-									clientStart = temp;
-									clientCurrent = clientStart + clientAllocated;
-								}
-								(*clientCurrent).window = *windowCurrent;
-								(*clientCurrent).damage = xcb_generate_id(connection);
-								(*clientCurrent).visual = (*attributeReply).visual;
-								(*clientCurrent).format = XCB_NONE;
-								(*clientCurrent).picture = XCB_NONE;
-								if(geometryReply){
-									(*clientCurrent).x = (*geometryReply).x;
-									(*clientCurrent).y = (*geometryReply).y;
-									(*clientCurrent).width = (*geometryReply).width;
-									(*clientCurrent).height = (*geometryReply).height;
-									free(geometryReply);
-								}else{
-									(*clientCurrent).x = (*screen).width_in_pixels;
-									(*clientCurrent).y = (*screen).height_in_pixels;
-									(*clientCurrent).width = 0;
-									(*clientCurrent).height = 0;
-								}
-								(*clientCurrent).imageX = 0;
-								(*clientCurrent).imageY = 0;
-								(*clientCurrent).viewableX = (*clientCurrent).x;
-								(*clientCurrent).viewableY = (*clientCurrent).y;
-								(*clientCurrent).viewableWidth = (*clientCurrent).width;
-								(*clientCurrent).viewableHeight = (*clientCurrent).height;
-								(*clientCurrent).index = clientAllocated;
-								(*clientCurrent).mappedIndex = -1;
-								if((*clientCurrent).viewableX < 0){
-									(*clientCurrent).imageX = -(*clientCurrent).x;
-									(*clientCurrent).viewableWidth += (*clientCurrent).viewableX;
-									(*clientCurrent).viewableX = 0;
-								}
-								if((*clientCurrent).viewableY < 0){
-									(*clientCurrent).imageY = -(*clientCurrent).y;
-									(*clientCurrent).viewableHeight += (*clientCurrent).viewableY;
-									(*clientCurrent).viewableY = 0;
-								}
-								if((*clientCurrent).viewableX + (*clientCurrent).viewableWidth > width){
-									(*clientCurrent).viewableWidth -= (*clientCurrent).viewableX + (*clientCurrent).viewableWidth - width;
-								}
-								if((*clientCurrent).viewableY + (*clientCurrent).viewableHeight > height){
-									(*clientCurrent).viewableHeight -= (*clientCurrent).viewableY + (*clientCurrent).viewableHeight - height;
-								}
-								if((*attributeReply).map_state == XCB_MAP_STATE_VIEWABLE){
-									(*clientCurrent).mappedIndex = mappedClientAllocated;
-									if(mappedClientAllocated == mappedClientSize){
-										void *temp;
-										mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
-										if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(uint)))){
-											exit(1);
-										}
-										mappedClientStart = temp;
-									}
-									*(mappedClientStart + mappedClientAllocated) = clientAllocated;
-									inc mappedClientAllocated;
-								}
-								xcb_change_window_attributes(connection, *windowCurrent, XCB_CW_EVENT_MASK, &windowValueList);
-								xcb_damage_create(connection, (*clientCurrent).damage, *windowCurrent, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
-								inc clientCurrent;
-								inc clientAllocated;
-							}
-							free(attributeReply);
-						}
-					}
-					if(inc windowCurrent < windowWall){
-						jmp getWindowAttributes2Loop;
-					}
-				}
-				clientWall = clientStart + clientAllocated;
-				free(treeReply);
-			}
-		}
-		calculateViewableWindowSizes();
-
-
-
-
-
-
-
-
-
-		jmp eventLoop;
-	}
-	circulateNotifyEvent:{
-
-
-
-		Client *clientCurrent = clientStart;
-		while(clientCurrent < clientWall){
-			xcb_damage_destroy(connection, (*clientCurrent).damage);
-			inc clientCurrent;
-		}
-
-
-
-		clientAllocated = 0;
-		mappedClientAllocated = 0;
-		{
-			xcb_query_tree_reply_t *const treeReply = xcb_wait_for_reply(connection, xcb_query_tree_unchecked(connection, (*screen).root), NULL);
-			if(treeReply){
-				const uint amount = xcb_query_tree_children_length(treeReply);
-				const xcb_window_t *const windowStart = xcb_query_tree_children(treeReply);
-				const xcb_window_t *windowCurrent = windowStart;
-				const xcb_window_t *const windowWall = windowStart + amount;
-				Client *clientCurrent = clientStart;
-				getWindowAttributes3Loop:{
-					if(*windowCurrent != overlayWindow){
-						xcb_get_window_attributes_reply_t *attributeReply = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, *windowCurrent), NULL);
-						if(attributeReply){
-							if((*attributeReply)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
-								xcb_get_geometry_reply_t *const geometryReply = xcb_wait_for_reply(connection, xcb_get_geometry_unchecked(connection, *windowCurrent), NULL);
-								if(clientAllocated == clientSize){
-									void *temp;
-									clientSize += CLIENT_BLOCK_SIZE;
-									if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
-										exit(1);
-									}
-									clientStart = temp;
-									clientCurrent = clientStart + clientAllocated;
-								}
-								(*clientCurrent).window = *windowCurrent;
-								(*clientCurrent).damage = xcb_generate_id(connection);
-								(*clientCurrent).visual = (*attributeReply).visual;
-								(*clientCurrent).format = XCB_NONE;
-								(*clientCurrent).picture = XCB_NONE;
-								if(geometryReply){
-									(*clientCurrent).x = (*geometryReply).x;
-									(*clientCurrent).y = (*geometryReply).y;
-									(*clientCurrent).width = (*geometryReply).width;
-									(*clientCurrent).height = (*geometryReply).height;
-									free(geometryReply);
-								}else{
-									(*clientCurrent).x = (*screen).width_in_pixels;
-									(*clientCurrent).y = (*screen).height_in_pixels;
-									(*clientCurrent).width = 0;
-									(*clientCurrent).height = 0;
-								}
-								(*clientCurrent).imageX = 0;
-								(*clientCurrent).imageY = 0;
-								(*clientCurrent).viewableX = (*clientCurrent).x;
-								(*clientCurrent).viewableY = (*clientCurrent).y;
-								(*clientCurrent).viewableWidth = (*clientCurrent).width;
-								(*clientCurrent).viewableHeight = (*clientCurrent).height;
-								(*clientCurrent).index = clientAllocated;
-								(*clientCurrent).mappedIndex = -1;
-								if((*clientCurrent).viewableX < 0){
-									(*clientCurrent).imageX = -(*clientCurrent).x;
-									(*clientCurrent).viewableWidth += (*clientCurrent).viewableX;
-									(*clientCurrent).viewableX = 0;
-								}
-								if((*clientCurrent).viewableY < 0){
-									(*clientCurrent).imageY = -(*clientCurrent).y;
-									(*clientCurrent).viewableHeight += (*clientCurrent).viewableY;
-									(*clientCurrent).viewableY = 0;
-								}
-								if((*clientCurrent).viewableX + (*clientCurrent).viewableWidth > width){
-									(*clientCurrent).viewableWidth -= (*clientCurrent).viewableX + (*clientCurrent).viewableWidth - width;
-								}
-								if((*clientCurrent).viewableY + (*clientCurrent).viewableHeight > height){
-									(*clientCurrent).viewableHeight -= (*clientCurrent).viewableY + (*clientCurrent).viewableHeight - height;
-								}
-								if((*attributeReply).map_state == XCB_MAP_STATE_VIEWABLE){
-									(*clientCurrent).mappedIndex = mappedClientAllocated;
-									if(mappedClientAllocated == mappedClientSize){
-										void *temp;
-										mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
-										if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(uint)))){
-											exit(1);
-										}
-										mappedClientStart = temp;
-									}
-									*(mappedClientStart + mappedClientAllocated) = clientAllocated;
-									inc mappedClientAllocated;
-								}
-								xcb_change_window_attributes(connection, *windowCurrent, XCB_CW_EVENT_MASK, &windowValueList);
-								xcb_damage_create(connection, (*clientCurrent).damage, *windowCurrent, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
-								inc clientCurrent;
-								inc clientAllocated;
-							}
-							free(attributeReply);
-						}
-					}
-					if(inc windowCurrent < windowWall){
-						jmp getWindowAttributes3Loop;
-					}
-				}
-				clientWall = clientStart + clientAllocated;
-				free(treeReply);
-			}
-		}
-		calculateViewableWindowSizes();
-
-
-
-		jmp eventLoop;
-	}
-	propertyNotifyEvent:{
-		if((*(xcb_property_notify_event_t *)event0).atom == rootPixmapAtom and rootPixmapAtom){
-			free(pixmapReply);
-			free(wallpaperReply);
-			if((pixmapReply = xcb_wait_for_reply(connection, xcb_get_property_unchecked(connection, false, (*screen).root, rootPixmapAtom, XCB_ATOM_PIXMAP, 0, 1), NULL))){
-				wallpaperPixmap = *(xcb_pixmap_t *)xcb_get_property_value(pixmapReply);
-				if(wallpaperPixmap){
-					wallpaperReply = xcb_wait_for_reply(connection, xcb_get_image_unchecked(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, wallpaperPixmap, 0, 0, width, height, -1), NULL);
-					pixmapData = (void *)xcb_get_image_data(wallpaperReply);
-				}
-			}
-		}
-		jmp eventLoop;
-	}
-	damageNotifyEvent:{
-		#define event0 /*-*/ ((xcb_damage_notify_event_t *)event0)
-
-
-
-		/*! something that works here, and is used by others
-			char *level;
-			switch (*event0).level over
-				to XCB_DAMAGE_REPORT_LEVEL_RAW_RECTANGLES:   level = "XCB_DAMAGE_REPORT_LEVEL_RAW_RECTANGLES";   brk;
-				to XCB_DAMAGE_REPORT_LEVEL_DELTA_RECTANGLES: level = "XCB_DAMAGE_REPORT_LEVEL_DELTA_RECTANGLES"; brk;
-				to XCB_DAMAGE_REPORT_LEVEL_BOUNDING_BOX:     level = "XCB_DAMAGE_REPORT_LEVEL_BOUNDING_BOX";     brk;
-				off:                                         level = "XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY";        brk;
-			end
-			fprintf(stdout, "\t\t\tlevel %s\n", level);
-			fprintf(stdout, "\t\t\tarea{ %i %i %i %i }\n", (*event0).area.x, (*event0).area.y, (*event0).area.width, (*event0).area.height);
-			fprintf(stdout, "\t\t\tgeometry{ %i %i %i %i }\n\n\n\n", (*event0).geometry.x, (*event0).geometry.y, (*event0).geometry.width, (*event0).geometry.height);
-		*/
-
-
-
-		/*! optimize the boiling hell out of this */
-
-
-
-		Client *const client = findWindow((*event0).drawable);
-		if(!client or (*client).mappedIndex == -1){
+			calculateViewableWindowSizes();
 			jmp eventLoop;
 		}
-
-
-
-
-
-
-
-
-
-		{
-			xcb_xfixes_region_t region = xcb_generate_id(connection);
-			if(!(*client).format){
-				/*! bool hasAlpha; */
-
-
-
-				const xcb_visualid_t visual = (*client).visual;
-				xcb_render_pictvisual_t *current = visualStart;
-				xcb_render_pictvisual_t *wall = visualStart + visualAmount;
-				while(current < wall){
-					if((*current).visual == visual){
-						(*client).format = (*current).format;
-						brk;
-					}
-					inc current;
-				}
-				{
-					uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
-					if((*client).picture){
-						xcb_render_free_picture(connection, (*client).picture);
-					}
-					(*client).picture = xcb_generate_id(connection);
-					xcb_render_create_picture(connection, (*client).picture, (*client).window, (*client).format, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
-				}
-
-
-
-				fprintf(stdout, "out looking for visual\n");
-			}
-
-
-
-			xcb_xfixes_create_region(connection, region, 1, &(*event0).geometry);
-			xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region);
-			xcb_xfixes_destroy_region(connection, region);
-
-
-
-			xcb_render_composite(connection, XCB_RENDER_PICT_OP_OVER, (*client).picture, XCB_NONE, pictureDest, 0, 0, 0, 0, (*event0).geometry.x, (*event0).geometry.y, (*event0).geometry.width, (*event0).geometry.height);
-		}
-
-
-
-
-
-
-
-
-
-#ifdef a
-		{
-			uint changedX = (*event0).geometry.x;
-			uint changedY = (*event0).geometry.y;
-			uint changedWidth = (*event0).geometry.width;
-			uint changedHeight = (*event0).geometry.height;
-
-
-
-			/*!
-				implement a loop here to see if the changed area matches the viewable area so we can then print it.
-				things to think about:
-					adding a loop sucks. do we just request the image once?
-			*/
-
-
-
-			/*! xcb_get_image_reply_t *const reply = xcb_wait_for_reply(connection, xcb_get_image_unchecked(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, (*event0).drawable, (*event0).area.x, (*event0).area.y, width, height, -1), NULL); */
-
-
-
-			xcb_get_image_reply_t *const reply = xcb_wait_for_reply(connection, xcb_get_image_unchecked(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, (*event0).drawable, 0, 0, (*client).width, (*client).height, -1), NULL);
-			if(reply){
-				uint32 *data = (void *)xcb_get_image_data(reply);
-
-
-
-				/*! draw according to what is visible and based on whether. if the window is 32 bit you must draw the windows below first and then this one on top. if the window is 24 bit then just draw it */
-
-
-
-				Rectangle *current = (*client).rectangle;
-				Rectangle *wall = current + (*client).allocated;
-				if(current < wall){
-					do{
-						int x;
-						int y;
-						int w;
-						int h;
-						if(findIntersectingArea(changedX, changedY, changedWidth, changedHeight, (*current).x, (*current).y, (*current).w, (*current).h, &x, &y, &w, &h)){
-							/*! fprintf(stdout, "putting on %i+%i+%ix%i\n", x, y, w, h); */
-
-
-
-							xcb_put_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, overlayWindow, overlaygc, w, h, x, y, 0, 24, w * h * sizeof(uint32), (void *)(data + (y - (*client).y) * changedWidth + x));
-
-
-
-						}
-					}while(inc current < wall);
-
-
-
-					/*! xcb_put_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, overlayWindow, overlaygc, width, height, (*event0).geometry.x, (*event0).geometry.y, 0, 24, width * height * sizeof(uint32), (void *)data); */
-
-
-
-				}else{
-					xcb_put_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, overlayWindow, overlaygc, changedWidth, changedHeight, changedX, changedY, 0, 24, changedWidth * changedHeight * sizeof(uint32), (void *)data);
-				}
-
-
-
-				free(reply);
-			}
-
-
-
-
-
-
-
-
-
-			{
-				xcb_xfixes_region_t region = xcb_generate_id(connection);
-				xcb_xfixes_create_region(connection, region, 1, &(*event0).area);
-
-
-
-				{
-					xcb_generic_error_t *error = xcb_request_check(connection, xcb_damage_subtract_checked(connection, (*event0).damage, XCB_NONE, region));
-					if(error){
-						free(error);
-					}
-				}
-
-
-
-				xcb_xfixes_destroy_region(connection, region);
-			}
-		}
-#endif
-
-
-
-
-
-
-
-
-
 		jmp eventLoop;
 		#undef  event0
 	}
+	createNotifyEvent: fprintf(stdout, "create notify\n"); {
+		#define event0 /*-*/ ((xcb_create_notify_event_t *)event0)
+		Client *const client = findClient((*event0).window);
+		queryTree();
+		if(!client){
+			if(addClient((*event0).window)){
+				updateOrder();
+				calculateViewableWindowSizes();
+			}
+		}
+		jmp eventLoop;
+		#undef  event0
+	}
+	destroyNotifyEvent: fprintf(stdout, "destroy notify\n"); {
+		#define event0 /*-*/ ((xcb_destroy_notify_event_t *)event0)
+		Client *const client = findClient((*event0).window);
+		queryTree();
+		if(client){
+			removeClient(client);
+			updateOrder();
+			calculateViewableWindowSizes();
+		}
+		jmp eventLoop;
+		#undef  event0
+	}
+	unmapNotifyEvent: fprintf(stdout, "unmap notify\n"); {
+		#define event0 /*-*/ ((xcb_unmap_notify_event_t *)event0)
+		Client *const client = findClient((*event0).window);
+		if(client){
+			unmapWindow(client);
+			calculateViewableWindowSizes();
+
+			/*!
+				draw again here
+			*/
+
+		}
+		jmp drawRegion;
+		#undef  event0
+	}
+	mapNotifyEvent: fprintf(stdout, "map notify\n"); {
+		#define event0 /*-*/ ((xcb_map_notify_event_t *)event0)
+		Client *const client = findClient((*event0).window);
+		if(client){
+			mapWindow(client);
+			calculateViewableWindowSizes();
+
+			/*!
+				draw again here?
+			*/
+
+		}
+		jmp eventLoop;
+		#undef  event0
+	}
+	reparentNotifyEvent: fprintf(stdout, "reparent notify\n"); {
+		#define event0 /*-*/ ((xcb_reparent_notify_event_t *)event0)
+		Client *const client = findClient((*event0).window);
+		queryTree();
+		if((*event0).parent == (*screen).root){
+			if(!client){
+				if(addClient((*event0).window)){
+					updateOrder();
+					calculateViewableWindowSizes();
+				}
+			}
+			jmp eventLoop;
+		}
+		if(client){
+			removeClient(client);
+			updateOrder();
+			calculateViewableWindowSizes();
+		}
+		jmp eventLoop;
+		#undef  event0
+	}
+	configureNotifyEvent: fprintf(stdout, "configure notify\n"); {
+		#define event0 /*-*/ ((xcb_configure_notify_event_t *)event0)
+		Client *const client = findClient((*event0).window);
+		if(!client){
+			jmp eventLoop;
+		}
+
+
+
+		/*! check rectangle intersection with other windows to draw them when there is movement */
+
+
+
+		/*! maybe update this later */
+
+
+
+		removeClient(client);
+		addClient((*event0).window);
+
+		updateOrder();
+		calculateViewableWindowSizes();
+		jmp eventLoop;
+		#undef  event0
+	}
+	circulateNotifyEvent: fprintf(stdout, "---------------circulate notify\n"); {
+		#define event0 /*-*/ ((xcb_circulate_notify_event_t *)event0)
+		queryTree();
+		updateOrder();
+		calculateViewableWindowSizes();
+		jmp eventLoop;
+		#undef  event0
+	}
+	propertyNotifyEvent:{
+		#define event0 /*-*/ ((xcb_property_notify_event_t *)event0)
+		if((*event0).atom == rootPixmapAtom and rootPixmapAtom){
+
+
+
+			/*! update pixmap here */
+
+
+
+		}
+		jmp eventLoop;
+		#undef  event0
+	}
+	damageNotifyEvent:{
+		#define event0 /*-*/ ((xcb_damage_notify_event_t *)event0)
+		const xcb_window_t window = (*event0).drawable;
+		Client *const client = findClient(window);
+		xcb_rectangle_t *geometry;
+		int eventX;
+		int eventY;
+		int eventW;
+		int eventH;
+		if(window == (*screen).root){
+			fprintf(stdout, "root damaged\n");
+		}
+		if(window == overlayWindow){
+			fprintf(stdout, "overlay damaged\n");
+		}
+		if(!client or !(*client).mapped){
+			jmp eventLoop;
+		}
+		if((*client).x + (*client).w < 1 or (*client).x >= (*screen).width_in_pixels or (*client).y + (*client).h < 1 or (*client).y >= (*screen).height_in_pixels){
+			jmp eventLoop;
+		}
+
+
+
+		geometry = &(*event0).geometry;
+		eventX = (*geometry).x;
+		eventY = (*geometry).y;
+		eventW = (*geometry).width;
+		eventH = (*geometry).height;
+		{
+			xcb_xfixes_region_t region = xcb_generate_id(connection);
+			xcb_xfixes_create_region(connection, region, 1, geometry);
+			xcb_damage_subtract(connection, (*client).damage, XCB_NONE, XCB_NONE);
+			/*! xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region); */
+			xcb_xfixes_destroy_region(connection, region);
+		}
+
+
+
+		if(!(*client).format){
+			const xcb_visualid_t visual = (*client).visual;
+			xcb_render_pictvisual_t *current = visualStart;
+			xcb_render_pictvisual_t *wall = visualStart + visualAmount;
+			while(current < wall){
+				if((*current).visual == visual){
+					(*client).format = (*current).format;
+					brk;
+				}
+				inc current;
+			}
+			/*! fprintf(stdout, "out looking for visual\n"); */
+		}
+
+
+
+		{
+			xcb_rectangle_t *rectangleStart = malloc(100 * sizeof(xcb_rectangle_t));
+			xcb_rectangle_t *rectangleCurrent = rectangleStart;
+			uint amount = 0;
+
+
+
+			const Rectangle *rectangle = (*client).rectangle;
+			const Rectangle *const wall = rectangle + (*client).allocated;
+			int x;
+			int y;
+			int w;
+			int h;
+
+
+
+			if(!rectangleStart){
+				jmp eventLoop;
+			}
+			while(rectangle < wall){
+				if(findIntersectingRectangle((*rectangle).x, (*rectangle).y, (*rectangle).w, (*rectangle).h, eventX, eventY, eventW, eventH, &x, &y, &w, &h)){
+					(*rectangleCurrent).x = x;
+					(*rectangleCurrent).y = y;
+					(*rectangleCurrent).width = w;
+					(*rectangleCurrent).height = h;
+					inc rectangleCurrent;
+					inc amount;
+				}
+				inc rectangle;
+			}
+			if(amount){
+				const uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
+				xcb_xfixes_region_t region = xcb_generate_id(connection);
+				xcb_xfixes_create_region(connection, region, amount, rectangleStart);
+				{
+					xcb_render_picture_t picture = xcb_generate_id(connection);
+					xcb_render_create_picture(connection, picture, window, (*client).format, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
+					{
+						xcb_xfixes_set_picture_clip_region(connection, picture, region, 0, 0);
+						xcb_render_composite(connection, XCB_RENDER_PICT_OP_OVER, picture, XCB_NONE, rootPicture, 0, 0, 0, 0, eventX, eventY, eventW, eventH);
+					}
+					xcb_render_free_picture(connection, picture);
+				}
+				xcb_xfixes_destroy_region(connection, region);
+			}
+			free(rectangleStart);
+		}
+
+
+
+
+
+
+
+
+
+		jmp drawRegion;
+		#undef  event0
+	}
+	drawRegion:{
+
+
+
+		/*!*/
+
+
+
+		jmp eventLoop;
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 	errorEvent:{
 		genericError = (void *)event0;
 		printXCBError();
@@ -2080,154 +1121,48 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp eventLoop;
 	}
 	unexpectedEvent:{
-		printUnexpectedEvent();
 		jmp eventLoop;
 	}
 	badDamageError:{
 		fprintf(stdout, "%s: bad damage error\n", programName);
 		jmp eventLoop;
 	}
-	/*! printFrame:{
-		clock_t t = clock();
-		uint *mappedClientCurrent = mappedClientStart;
-		uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
-		xcb_get_image_cookie_t *frameCookieCurrent = frameCookieStart;
-		getImageCookieLoop:{
-			const Client *const c = clientStart + *mappedClientCurrent;
-			*frameCookieCurrent = xcb_get_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, (*c).window, (*c).imageX, (*c).imageY, (*c).viewableWidth, (*c).viewableHeight, -1);
-			if(inc mappedClientCurrent < mappedClientWall){
-				inc frameCookieCurrent;
-				jmp getImageCookieLoop;
-			}
-			mappedClientCurrent = mappedClientStart;
-			frameCookieCurrent = frameCookieStart;
-			jmp drawWindowsLoop;
-		}
-		drawWindowsLoop:{
-			xcb_get_image_reply_t *const reply = xcb_wait_for_reply(connection, *frameCookieCurrent, NULL);
-			if(reply){
-				const Client *const c = clientStart + *mappedClientCurrent;
-				const int clientWidth = (*c).viewableWidth;
-				const int clientHeight = (*c).viewableHeight;
-				if(clientWidth > 0 and clientHeight > 0){
-					uint32 *sourceData = (void *)xcb_get_image_data(reply);
-					uint32 *destinationData = data + (*c).viewableY * width + (*c).viewableX;
-					uint32 *dStart = destinationData;
-					uint32 *sStart = sourceData;
-					uint32 *dWall = destinationData + width * clientHeight;
-					uint32 *dW = dStart + clientWidth;
-					switch (*reply).depth over
-						to 24:{
-							while(dStart < dWall){
-								uint32 *dCurrent = dStart;
-								uint32 *sCurrent = sStart;
-								while(dCurrent < dW){
-									*dCurrent = *sCurrent;
-									inc dCurrent;
-									inc sCurrent;
-								}
-								dStart += width;
-								sStart += clientWidth;
-								dW += width;
-							}
-							brk;
-						}
-						to 32:{
-							while(dStart < dWall){
-								uint32 *dCurrent = dStart;
-								uint32 *sCurrent = sStart;
-								while(dCurrent < dW){
-									const uint32 alpha = *sCurrent & 0xFF000000;
-									if(alpha == 0xFF000000){
-										*dCurrent = *sCurrent;
-									}elif(alpha){
-										const uint32 a0 = alpha >> 24;
-										const uint32 a1 = 0xFF - a0;
-										const uint32 r = a0 * (*sCurrent & 0x00FF0000) + a1 * (*dCurrent & 0x00FF0000);
-										const uint32 g = a0 * (*sCurrent & 0x0000FF00) + a1 * (*dCurrent & 0x0000FF00);
-										const uint32 b = a0 * (*sCurrent & 0x000000FF) + a1 * (*dCurrent & 0x000000FF);
-										*dCurrent = ((r & 0xFF000000) + (g & 0x00FF0000) + (b & 0x0000FF00)) >> 8 | 0xFF000000;
-									}
-									inc dCurrent;
-									inc sCurrent;
-								}
-								dStart += width;
-								sStart += clientWidth;
-								dW += width;
-							}
-							brk;
-						}
-						off:{
-							brk;
-						}
-					end
-				}
-				free(reply);
-			}
-			if(inc mappedClientCurrent < mappedClientWall){
-				inc frameCookieCurrent;
-				jmp drawWindowsLoop;
-			}
-		}
-		xcb_put_image(connection, XCB_IMAGE_FORMAT_Z_PIXMAP, overlayWindow, overlaygc, width, height, 0, 0, 0, 24, width * height * sizeof(uint32), (void *)data);
-		xcb_flush(connection);
+	randrNotifyEvent:{
+		const uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
+		fprintf(stdout, "%s: randr notify event\n", programName);
 
 
 
-		t = clock() - t;
-		if(t < minClock){
-			minClock = t;
-		}
-		if(t > maxClock){
-			maxClock = t;
-		}
-		if(avgClockCounter == 0){
-			timerArray[0] = t;
-			inc avgClockCounter;
-			avgClock = t;
-		}elif(avgClockCounter == 1){
-			timerArray[1] = t;
-			inc avgClockCounter;
-			avgClock = t + timerArray[0];
-		}elif(avgClockCounter == 2){
-			timerArray[2] = t;
-			inc avgClockCounter;
-			avgClock = t + timerArray[0] + timerArray[1];
-		}elif(avgClockCounter == 3){
-			timerArray[3] = t;
-			inc avgClockCounter;
-			avgClock = t + timerArray[0] + timerArray[1] + timerArray[2];
-		}elif(avgClockCounter == 4){
-			timerArray[4] = t;
-			inc avgClockCounter;
-			avgClock = t + timerArray[0] + timerArray[1] + timerArray[2] + timerArray[3];
-		}
-		if(avgClockCounter == 5){
-			timerArray[0] = timerArray[1];
-			timerArray[1] = timerArray[2];
-			timerArray[2] = timerArray[3];
-			timerArray[3] = timerArray[4];
-			timerArray[4] = t;
-			avgClock = timerArray[0] + timerArray[1] + timerArray[2] + timerArray[3] + timerArray[4] + t;
-		}
-		fprintf(stdout, "took %lu\t\tmin %lu\t\tmax %lu\t\tavg %lu\n", t, minClock, maxClock, avgClock / avgClockCounter);
+		/*! update root buffer pixmap and picture here */
+
+		xcb_render_free_picture(connection, rootPicture);
+		xcb_render_free_picture(connection, bufferPicture);
+		xcb_free_pixmap(connection, bufferPixmap);
+		bufferPixmap = xcb_generate_id(connection);
+		bufferPicture = xcb_generate_id(connection);
+		rootPicture = xcb_generate_id(connection);
+		xcb_create_pixmap(connection, (*screen).root_depth, bufferPixmap, (*screen).root, (*screen).width_in_pixels, (*screen).height_in_pixels);
+		xcb_render_create_picture(connection, bufferPicture, bufferPixmap, rootFormat, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
+		xcb_render_create_picture(connection, rootPicture, overlayWindow, rootFormat, XCB_NONE, NULL);
 
 
 
-		if((event0 = xcb_poll_for_event(connection))){
-			jmp switchEvents;
-		}
-		if(xcb_connection_has_error(connection)){
-			printConnectionError();
-			jmp eventLoopExit;
-		}
-		jmp printFrame;
-	} */
+		jmp eventLoop;
+	}
+	randrNotifyError:{
+		fprintf(stdout, "%s: randr notify event\n", programName);
+
+
+
+		/*! update root buffer pixmap and picture here */
+
+
+
+		jmp eventLoop;
+	}
 	eventLoopExit:{
 		free(event0);
 		event0 = NULL;
-		free(event1);
-		event1 = NULL;
 		jmp mainEmergencyExit;
 	}
 	mainEmergencyExit:{
@@ -2236,176 +1171,455 @@ int main(const int argumentAmount, const char *const *argument){
 		ret 0;
 	}
 }
-local Client *findWindow(const xcb_window_t w){
-	Client *clientCurrent = clientStart;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+FINDINTERSECTINGRECTANGLE(){
+	int  rightX0 = leftX0 +  width0;
+	int  rightX1 = leftX1 +  width1;
+	int bottomY0 =  topY0 + height0;
+	int bottomY1 =  topY1 + height1;
+	if(leftX1 < rightX0 and rightX1 > leftX0 and topY1 < bottomY0 and bottomY1 > topY0){
+		*retX      =    leftX0 >   leftX1?   leftX0 :   leftX1;
+		*retY      =     topY0 >    topY1?    topY0 :    topY1;
+		*retWidth  = ( rightX0 <  rightX1?  rightX0 :  rightX1) - *retX;
+		*retHeight = (bottomY0 < bottomY1? bottomY0 : bottomY1) - *retY;
+		ret true;
+	}
+	ret false;
+}
+SPLITRECTANGLE(){
+	Rectangle *current;
+	if(*allocated + 4 >= *size){
+		void *temp;
+		*size += RECTANGLE_BLOCK_SIZE;
+		if(!(temp = realloc(*rectangle, *size * sizeof(Rectangle)))){
+			jmp emergencyExit;
+		}
+		*rectangle = temp;
+	}
+	current = *rectangle + *allocated;
+	if(interY > y){
+		(*current).x = x;
+		(*current).y = y;
+		(*current).w = w;
+		(*current).h = interY - y;
+		inc current;
+	}
+	if(interY + interH < y + h){
+		(*current).x = x;
+		(*current).y = interY + interH;
+		(*current).w = w;
+		(*current).h = y + h - interY - interH;
+		inc current;
+	}
+	if(interX > x){
+		(*current).x = x;
+		(*current).y = interY;
+		(*current).w = interX - x;
+		(*current).h = interH;
+		inc current;
+	}
+	if(interX + interW < x + w){
+		(*current).x = interX + interW;
+		(*current).y = interY;
+		(*current).w = x + w - interX - interW;
+		(*current).h = interH;
+		inc current;
+	}
+	*allocated = current - *rectangle;
+	ret;
+	emergencyExit:{
+
+
+
+		/*! realloc will eventually fail. what do? */
+
+
+
+		*size = RECTANGLE_BLOCK_SIZE;
+		*allocated = 0;
+		free(*rectangle);
+		*rectangle = NULL;
+		ret;
+	}
+}
+CALCULATEVIEWABLEWINDOWSIZES(){
+	uint *belowCurrent = orderedClientOffsetStart - 1;
+	uint *offsetWall = orderedClientOffsetStart + clientAllocated;
+	jmp resetClientRectangle;
+	resetClientRectangle:{
+		Client *client = clientStart;
+		jmp resetClientRectangleLoop;
+		resetClientRectangleLoop:{
+			if(client < clientWall){
+				Rectangle *rectangle = (*client).rectangle;
+				if(rectangle){
+					(*rectangle).x = (*client).x;
+					(*rectangle).y = (*client).y;
+					(*rectangle).w = (*client).w;
+					(*rectangle).h = (*client).h;
+					(*client).allocated = 1;
+				}
+				inc client;
+				jmp resetClientRectangleLoop;
+			}
+		}
+		jmp belowClientLoop;
+	}
+	belowClientLoop:{
+		if(inc belowCurrent < offsetWall){
+			Client *const below = clientStart + *belowCurrent;
+			uint *aboveCurrent;
+
+
+
+			/*! fprintf(stdout, "%i\n", *belowCurrent); */
+
+
+
+			if(*belowCurrent == (uint)-1 or !(*below).mapped){
+				jmp belowClientLoop;
+			}
+			aboveCurrent = belowCurrent;
+			jmp aboveClientLoop;
+			aboveClientLoop:{
+				if(inc aboveCurrent < offsetWall){
+					Client *const above = clientStart + *aboveCurrent;
+					int x;
+					int y;
+					int w;
+					int h;
+					if(*aboveCurrent == (uint)-1 or !(*above).mapped){
+						jmp aboveClientLoop;
+					}
+					if(findIntersectingRectangle((*above).x, (*above).y, (*above).w, (*above).h, (*below).x, (*below).y, (*below).w, (*below).h, &x, &y, &w, &h)){
+						Rectangle *rectangle = (*below).rectangle;
+						if(rectangle){
+							Rectangle *rectangleWall = rectangle + (*below).allocated;
+							uint size = RECTANGLE_BLOCK_SIZE;
+							uint allocated = 0;
+							Rectangle *newRectangle = malloc(size * sizeof(Rectangle));
+							if(!newRectangle){
+								fprintf(stdout, "\n\n\nproblem1\n\n\n\n");
+							}
+							jmp splitRectanglesLoop;
+							splitRectanglesLoop:{
+								if(rectangle < rectangleWall){
+									if(findIntersectingRectangle((*rectangle).x, (*rectangle).y, (*rectangle).w, (*rectangle).h, (*above).x, (*above).y, (*above).w, (*above).h, &x, &y, &w, &h)){
+										splitRectangle((*rectangle).x, (*rectangle).y, (*rectangle).w, (*rectangle).h, x, y, w, h, &size, &allocated, &newRectangle);
+									}else{
+										if(allocated == size){
+											void *temp;
+											size += RECTANGLE_BLOCK_SIZE;
+											if(!(temp = realloc(newRectangle, size * sizeof(Rectangle)))){
+												fprintf(stdout, "\n\n\nproblem2\n\n\n\n");
+											}
+											newRectangle = temp;
+										}
+										*(newRectangle + allocated) = *rectangle;
+										inc allocated;
+									}
+									inc rectangle;
+									jmp splitRectanglesLoop;
+								}
+							}
+							free((*below).rectangle);
+							(*below).size = size;
+							(*below).allocated = allocated;
+							(*below).rectangle = newRectangle;
+						}
+					}
+					jmp aboveClientLoop;
+				}
+			}
+			jmp belowClientLoop;
+		}
+	}
+
+
+
+
+
+
+
+
+
+	/*!{
+		uint *current = orderedClientOffsetStart;
+		uint *wall = orderedClientOffsetStart + clientAllocated;
+		uint i = 0;
+		while(current < wall){
+			if(*current != -1){
+				Client *client = clientStart + *current;
+				if((*client).mapped){
+					Rectangle *rectangle = (*client).rectangle;
+					Rectangle *wall = (*client).rectangle + (*client).allocated;
+					fprintf(stdout, "\tclient %u:\n", i);
+					inc i;
+					while(rectangle < wall){
+						fprintf(stdout, "\t\t%i %i %i %i\n", (*rectangle).x, (*rectangle).y, (*rectangle).w, (*rectangle).h);
+						inc rectangle;
+					}
+				}
+			}
+			inc current;
+		}
+		fprintf(stdout, "\n\n\n");
+	}*/
+
+
+
+	ret;
+}
+ADDCLIENT(){
+	xcb_get_window_attributes_cookie_t attributesCookie;
+	xcb_get_geometry_cookie_t geometryCookie;
+	xcb_get_window_attributes_reply_t *attributesReply;
+	xcb_get_geometry_reply_t *geometryReply;
+	Client *client;
+
+
+
+	if(window == overlayWindow){
+		ret false;
+	}
+	attributesCookie = xcb_get_window_attributes_unchecked(connection, window);
+	geometryCookie = xcb_get_geometry_unchecked(connection, window);
+	attributesReply = xcb_wait_for_reply(connection, attributesCookie, NULL);
+	geometryReply = xcb_wait_for_reply(connection, geometryCookie, NULL);
+	if(!attributesReply or !geometryReply /*! or (*attributesReply)._class != XCB_WINDOW_CLASS_INPUT_OUTPUT */ ){
+		jmp emergencyExit;
+	}
+
+
+
+	if(clientAllocated == clientSize){
+		void *temp;
+		void *temp1;
+		clientSize += CLIENT_BLOCK_SIZE;
+		if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
+			jmp emergencyExit;
+		}
+		clientStart = temp;
+		if(!(temp1 = realloc(orderedClientOffsetStart, clientSize * sizeof(uint)))){
+			jmp emergencyExit;
+		}
+		orderedClientOffsetStart = temp1;
+	}
+	client = clientStart + clientAllocated;
+
+
+
+	if(geometryReply){
+		(*client).x = (*geometryReply).x;
+		(*client).y = (*geometryReply).y;
+		(*client).w = (*geometryReply).width;
+		(*client).h = (*geometryReply).height;
+	}else{
+		(*client).x = (*screen).width_in_pixels;
+		(*client).y = (*screen).height_in_pixels;
+		(*client).w = 0;
+		(*client).h = 0;
+	}
+
+
+
+	(*client).window = window;
+	(*client).damage = xcb_generate_id(connection);
+	(*client).visual = (*attributesReply).visual;
+	(*client).format = XCB_NONE;
+	(*client).picture = XCB_NONE;
+	(*client).mapped = (*attributesReply).map_state == XCB_MAP_STATE_VIEWABLE;
+
+
+
+	(*client).size = RECTANGLE_BLOCK_SIZE;
+	(*client).allocated = 0;
+	(*client).rectangle = malloc((*client).size * sizeof(Rectangle));
+
+
+
+	xcb_change_window_attributes(connection, window, XCB_CW_EVENT_MASK, &windowValueList);
+
+
+
+	/*! fails 7 times per run */
+
+	xcb_damage_create_checked(connection, (*client).damage, window, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
+
+
+
+	free(attributesReply);
+	free(geometryReply);
+
+
+
+	inc clientAllocated;
+	inc clientWall;
+	ret true;
+
+
+
+	emergencyExit:{
+		free(attributesReply);
+		free(geometryReply);
+		ret false;
+	}
+}
+QUERYTREE(){
+	const xcb_query_tree_cookie_t cookie = xcb_query_tree_unchecked(connection, (*screen).root);
+	if(treeReply){
+		free(treeReply);
+	}
+	treeReply = xcb_wait_for_reply(connection, cookie, NULL);
+	ret;
+}
+UPDATEORDER(){
+	/*! what if treeReply == NULL */
+/*!
+	if(treeReply){
+		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
+		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
+		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
+		findClientWindowLoop:{
+			xcb_get_window_attributes_reply_t *attributesReply = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, *windowCurrent), NULL);
+			if(!attributesReply or (*attributesReply)._class != XCB_WINDOW_CLASS_INPUT_OUTPUT){
+				Client *const client = findClient(*windowCurrent);
+				if(client){
+					*orderedClientOffsetCurrent = client - clientStart;
+				}else{
+					*orderedClientOffsetCurrent = -1;
+					fprintf(stdout, "window not found in update order\n");
+				}
+			}
+			if(inc windowCurrent < windowWall){
+				inc orderedClientOffsetCurrent;
+				jmp findClientWindowLoop;
+			}
+		}
+	}
+*/
+	if(treeReply){
+		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
+		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
+		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
+		findClientWindowLoop:{
+			Client *const client = findClient(*windowCurrent);
+			if(client){
+				*orderedClientOffsetCurrent = client - clientStart;
+			}else{
+				*orderedClientOffsetCurrent = -1;
+				/*! fprintf(stdout, "window not found in update order\n"); */
+			}
+			if(inc windowCurrent < windowWall){
+				inc orderedClientOffsetCurrent;
+				jmp findClientWindowLoop;
+			}
+		}
+	}
+	ret;
+}
+UNMAPWINDOW(){
+	(*client).mapped = false;
+	ret;
+}
+MAPWINDOW(){
+	(*client).mapped = true;
+	ret;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+FINDCLIENT(){
+	const uint8 *current = (void *)&(*clientStart).window;
 	jmp findClientLoop;
 	findClientLoop:{
-		if((*clientCurrent).window == w){
-			ret clientCurrent;
+		if(*(xcb_window_t *)current == window){
+			ret (void *)(current - ((uint8 *)&(*clientStart).window - (uint8 *)clientStart));
 		}
-		if(inc clientCurrent < clientWall){
+		if((current += sizeof(Client)) < (uint8 *)clientWall){
 			jmp findClientLoop;
 		}
 		ret NULL;
 	}
 }
-local void unmapWindow(Client *const client){
-	if((*client).mappedIndex != -1){
-		const uint32 valueList = XCB_NONE;
-		uint *mappedClientCurrent = mappedClientStart + (*client).mappedIndex;
-		uint *mappedClientWall = mappedClientStart + dec mappedClientAllocated;
-		xcb_change_window_attributes(connection, (*client).window, XCB_CW_EVENT_MASK, &valueList);
-		while(mappedClientCurrent < mappedClientWall){
-			Client *const c = clientStart + *(mappedClientCurrent + 1);
-			*mappedClientCurrent = (*c).index;
-			dec (*c).mappedIndex;
-			inc mappedClientCurrent;
-		}
-		(*client).mappedIndex = -1;
+REMOVECLIENT(){
+	xcb_damage_destroy(connection, (*client).damage);
+	if((*client).picture){
+		xcb_render_free_picture(connection, (*client).picture);
 	}
+	*client = *(clientWall - 1);
+	dec clientAllocated;
+	dec clientWall;
 	ret;
 }
-local void mapWindow(Client *const client){
-	if((*client).mappedIndex != -1){
-		ret;
-	}
-	if(mappedClientAllocated == mappedClientSize){
-		void *temp;
-		mappedClientSize += MAPPED_CLIENT_BLOCK_SIZE;
-		if(!(temp = realloc(mappedClientStart, mappedClientSize * sizeof(uint)))){
-			ret;
-		}
-		mappedClientStart = temp;
-	}
-	{
-		uint *current = mappedClientStart + mappedClientAllocated;
-		uint *currentCopy = current;
-		uint index = (*client).index;
-		while(current > mappedClientStart and (*(clientStart + *(current - 1))).index > index){
-			Client *const c = clientStart + *(current - 1);
-			*current = (*c).index;
-			inc (*c).mappedIndex;
-			dec current;
-		}
-		(*client).mappedIndex = mappedClientAllocated - (currentCopy - current);
-		*current = (*client).index;
-		inc mappedClientAllocated;
-	}
-	ret;
-}
-/*! local void calculateWallpaperStrips(void){
-	{
-		bool *wallpaperTruthTableCurrent = wallpaperTruthTableStart;
-		bool *wallpaperTruthTableWall = wallpaperTruthTableStart + pixelsToDraw;
-		while(wallpaperTruthTableCurrent < wallpaperTruthTableWall){
-			*wallpaperTruthTableCurrent = false;
-			inc wallpaperTruthTableCurrent;
-		}
-	}
-	{
-		uint *mappedClientCurrent = mappedClientStart;
-		uint *mappedClientWall = mappedClientStart + mappedClientAllocated;
-		fillWallpaperTruthTableStartLoop:{
-			const Client *const c = clientStart + *mappedClientCurrent;
-			const int viewableWidth = (*c).viewableWidth;
-			const int viewableHeight = (*c).viewableHeight;
-			if(viewableWidth > 0 and viewableHeight > 0){
-				const int viewableX = (*c).viewableX;
-				const int viewableY = (*c).viewableY;
-				int x;
-				int y;
-				bool *wallpaperTruthTableCurrent = wallpaperTruthTableStart + viewableY * width + viewableX;
-				for(y = 0; y < viewableHeight; inc y){
-					for(x = 0; x < viewableWidth; inc x){
-						*wallpaperTruthTableCurrent = true;
-						inc wallpaperTruthTableCurrent;
-					}
-					wallpaperTruthTableCurrent += width - viewableWidth;
-				}
-			}
-			if(inc mappedClientCurrent < mappedClientWall){
-				jmp fillWallpaperTruthTableStartLoop;
-			}
-		}
-	}
-	{
-		bool *current = wallpaperTruthTableStart;
-		bool *wall = wallpaperTruthTableStart + pixelsToDraw;
-		WallpaperStrip *wallpaperStripCurrent = wallpaperStripStart;
-		bool *sStart = NULL;
-		wallpaperStripAllocated = 0;
-		fillLoop:{
-			if(!*current){
-				if(!sStart){
-					sStart = current;
-				}
-			}else{
-				if(sStart){
-					addWallpaperStrip:{
-						if(wallpaperStripAllocated == wallpaperStripSize){
-							void *temp;
-							wallpaperStripSize += WALLPAPER_STRIP_BLOCK_SIZE;
-							if(!(temp = realloc(wallpaperStripStart, wallpaperStripSize * sizeof(WallpaperStrip)))){
-								exit(1);
-							}
-							wallpaperStripCurrent = (WallpaperStrip *)temp + (wallpaperStripCurrent - wallpaperStripStart);
-							wallpaperStripStart = temp;
-						}
-						(*wallpaperStripCurrent).start = sStart - wallpaperTruthTableStart;
-						(*wallpaperStripCurrent).wall = current - wallpaperTruthTableStart;
-						inc wallpaperStripCurrent;
-						inc wallpaperStripAllocated;
-						sStart = NULL;
-					}
-				}
-			}
-			if(inc current < wall){
-				jmp fillLoop;
-			}
-			if(sStart){
-				jmp addWallpaperStrip;
-			}
-		}
-	}
-	ret;
-}
-local void printWallpaper(void){
-	WallpaperStrip *wallpaperStripCurrent = wallpaperStripStart;
-	WallpaperStrip *wallpaperStripWall = wallpaperStripStart + wallpaperStripAllocated;
-	printWallpaperLoop:{
-		if(wallpaperStripCurrent < wallpaperStripWall){
-			const uint32 *const dWall = data + (*wallpaperStripCurrent).wall;
-			uint32 *d = data + (*wallpaperStripCurrent).start;
-			uint32 *s = pixmapData + (*wallpaperStripCurrent).start;
-			while(d < dWall){
-				*d = *s;
-				inc d;
-				inc s;
-			}
-			inc wallpaperStripCurrent;
-			jmp printWallpaperLoop;
-		}
-	}
-	ret;
-} */
-PRINTERROR_DEC{
+PRINTERROR(){
 	if(openErrorStream()){
 		fprintf(errorStream, "%s: %s\n", programName, string);
 		closeErrorStream();
 	}
 	ret;
 }
-OPENERRORSTREAM_DEC{
+OPENERRORSTREAM(){
 	ret !mustOpenErrorStream or (errorStream = fopen(errorPath, "a"));
 }
-CLOSEERRORSTREAM_DEC{
+CLOSEERRORSTREAM(){
 	if(mustOpenErrorStream and errorStream){
 		fclose(errorStream);
 		errorStream = NULL;
 	}
 	ret;
 }
-PRINTCONNECTIONERROR_DEC{
+PRINTCONNECTIONERROR(){
 	if(openErrorStream()){
 		#define PRINTCONNECTIONERROR_ERROR /*--*/ xcb_connection_has_error(connection)
 		#define PRINTCONNECTIONERROR_STREAM /*-*/ errorStream
@@ -2414,15 +1628,7 @@ PRINTCONNECTIONERROR_DEC{
 	}
 	ret;
 }
-#if DEBUG
-PRINTEVENT_DEC{
-	#define PRINTEVENT_EVENT /*--*/ event0
-	#define PRINTEVENT_STREAM /*-*/ stdout
-	#include "xcb/printEvent.hold"
-	ret;
-}
-#endif
-PRINTXCBERROR_DEC{
+PRINTXCBERROR(){
 	if(openErrorStream()){
 		#define PRINTXCBERROR_ERROR /*--*/ genericError
 		#define PRINTXCBERROR_STREAM /*-*/ errorStream
@@ -2431,14 +1637,120 @@ PRINTXCBERROR_DEC{
 	}
 	ret;
 }
-#if DEBUG
-PRINTUNEXPECTEDEVENT_DEC{
-	if(openErrorStream()){
-		#define PRINTUNEXPECTEDEVENT_EVENT /*--*/ event0
-		#define PRINTUNEXPECTEDEVENT_STREAM /*-*/ errorStream
-		#include "xcb/printUnexpectedEvent.hold"
-		closeErrorStream();
-	}
-	ret;
-}
+
+
+
+
+
+
+
+
+
+#ifdef a
+		if((*client).rectangle){
+			xcb_rectangle_t *rectangleStart = malloc(100 * sizeof(xcb_rectangle_t));
+			xcb_rectangle_t *rectangleCurrent = rectangleStart;
+			uint amount = 0;
+
+
+
+			const Rectangle *rectangle = (*client).rectangle;
+			const Rectangle *const wall = rectangle + (*client).allocated;
+			int x;
+			int y;
+			int w;
+			int h;
+			while(rectangle < wall){
+				if(findIntersectingRectangle((*rectangle).x, (*rectangle).y, (*rectangle).w, (*rectangle).h, eventX, eventY, eventW, eventH, &x, &y, &w, &h)){
+					(*rectangleCurrent).x = x;
+					(*rectangleCurrent).x = y;
+					(*rectangleCurrent).width = w;
+					(*rectangleCurrent).height = h;
+					inc rectangleCurrent;
+					inc amount;
+				}
+				inc rectangle;
+			}
+			if(amount){
+				const uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
+				xcb_xfixes_region_t region = xcb_generate_id(connection);
+				xcb_xfixes_create_region(connection, region, amount, rectangleStart);
+
+
+
+				{
+					xcb_render_picture_t picture = xcb_generate_id(connection);
+
+
+
+/*! messes up somewhere */
+					/*! xcb_pixmap_t pixmap = xcb_generate_id(connection);
+					xcb_create_pixmap(connection, (*screen).root_depth, pixmap, (*screen).root, eventW, eventH); */
+
+
+
+					xcb_render_create_picture(connection, picture, window, (*client).format, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
+
+
+
+/*!
+					xcb_xfixes_set_picture_clip_region(connection, picture, region, 0, 0);
+					xcb_render_composite(connection, XCB_RENDER_PICT_OP_OVER, picture, XCB_NONE, rootPicture, 0, 0, 0, 0, eventX, eventY, eventW, eventH);
+					xcb_render_free_picture(connection, picture);
+*/
+				}
+
+
+
+				xcb_xfixes_destroy_region(connection, region);
+			}
+		}else{
+/*!
+			xcb_xfixes_region_t region = xcb_generate_id(connection);
+			xcb_render_picture_t picture = xcb_generate_id(connection);
+			xcb_xfixes_create_region(connection, region, 1, geometry);
+
+
+
+			xcb_render_create_picture(connection, picture, window, (*client).format, XCB_NONE, NULL);
+			xcb_xfixes_set_picture_clip_region(connection, picture, region, 0, 0);
+
+
+
+			xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, picture, XCB_NONE, rootPicture, 0, 0, 0, 0, (*geometry).x, (*geometry).y, (*geometry).width, (*geometry).height);
+
+
+
+			xcb_xfixes_destroy_region(connection, region);
+			xcb_render_free_picture(connection, picture);
+*/
+			fprintf(stdout, "---------------------------------------------not a rectangle\n");
+		}
+
+
+
+		{
+			xcb_xfixes_region_t region = xcb_generate_id(connection);
+			xcb_xfixes_create_region(connection, region, 1, geometry);
+			xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region);
+			xcb_xfixes_destroy_region(connection, region);
+		}
+#endif
+
+#ifdef a
+		{
+			xcb_xfixes_region_t region = xcb_generate_id(connection);
+			xcb_xfixes_create_region(connection, region, 1, geometry);
+			{
+				xcb_render_picture_t picture = xcb_generate_id(connection);
+				xcb_render_create_picture(connection, picture, window, (*client).format, XCB_NONE, NULL);
+				{
+					xcb_xfixes_set_picture_clip_region(connection, picture, region, 0, 0);
+					xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region);
+					xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, picture, XCB_NONE, rootPicture, 0, 0, 0, 0, (*geometry).x, (*geometry).y, (*geometry).width, (*geometry).height);
+				}
+				xcb_render_free_picture(connection, picture);
+			}
+			xcb_xfixes_destroy_region(connection, region);
+		}
 #endif
