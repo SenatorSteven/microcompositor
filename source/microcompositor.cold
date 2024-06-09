@@ -7,10 +7,6 @@
 */
 
 /*!
-	sometimes the wallpaper data are not set even though the pixmap is. find what causes that.
-*/
-
-/*!
 	maybe setup a picture or an equivalent to be drawn when rectangles of the root are viewable
 */
 
@@ -32,7 +28,7 @@
 */
 
 /*!
-	consider not drawing anything outside the screen
+	consider not drawing anything outside the screen.
 */
 
 /*!
@@ -61,6 +57,10 @@
 	grab server when doing critical operation when the server starts
 
 	ungrab afterwards
+*/
+
+/*!
+	keep non-input-output windows?
 */
 
 
@@ -1450,10 +1450,13 @@ ADDCLIENT(){
 
 
 	(*client).window = window;
-	(*client).damage = xcb_generate_id(connection);
+	(*client).damage = XCB_NONE;
 	(*client).visual = (*attributesReply).visual;
 	(*client).format = XCB_NONE;
 	(*client).picture = XCB_NONE;
+
+	/*! maybe note that the window is mapped, unmapped or just unviewable */
+
 	(*client).mapped = (*attributesReply).map_state == XCB_MAP_STATE_VIEWABLE;
 
 
@@ -1468,9 +1471,10 @@ ADDCLIENT(){
 
 
 
-	/*! fails 7 times per run */
-
-	xcb_damage_create_checked(connection, (*client).damage, window, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
+	if((*attributesReply)._class == XCB_WINDOW_CLASS_INPUT_OUTPUT){
+		(*client).damage = xcb_generate_id(connection);
+		xcb_damage_create(connection, (*client).damage, window, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
+	}
 
 
 
@@ -1637,120 +1641,3 @@ PRINTXCBERROR(){
 	}
 	ret;
 }
-
-
-
-
-
-
-
-
-
-#ifdef a
-		if((*client).rectangle){
-			xcb_rectangle_t *rectangleStart = malloc(100 * sizeof(xcb_rectangle_t));
-			xcb_rectangle_t *rectangleCurrent = rectangleStart;
-			uint amount = 0;
-
-
-
-			const Rectangle *rectangle = (*client).rectangle;
-			const Rectangle *const wall = rectangle + (*client).allocated;
-			int x;
-			int y;
-			int w;
-			int h;
-			while(rectangle < wall){
-				if(findIntersectingRectangle((*rectangle).x, (*rectangle).y, (*rectangle).w, (*rectangle).h, eventX, eventY, eventW, eventH, &x, &y, &w, &h)){
-					(*rectangleCurrent).x = x;
-					(*rectangleCurrent).x = y;
-					(*rectangleCurrent).width = w;
-					(*rectangleCurrent).height = h;
-					inc rectangleCurrent;
-					inc amount;
-				}
-				inc rectangle;
-			}
-			if(amount){
-				const uint32 valueList = XCB_SUBWINDOW_MODE_INCLUDE_INFERIORS;
-				xcb_xfixes_region_t region = xcb_generate_id(connection);
-				xcb_xfixes_create_region(connection, region, amount, rectangleStart);
-
-
-
-				{
-					xcb_render_picture_t picture = xcb_generate_id(connection);
-
-
-
-/*! messes up somewhere */
-					/*! xcb_pixmap_t pixmap = xcb_generate_id(connection);
-					xcb_create_pixmap(connection, (*screen).root_depth, pixmap, (*screen).root, eventW, eventH); */
-
-
-
-					xcb_render_create_picture(connection, picture, window, (*client).format, XCB_RENDER_CP_SUBWINDOW_MODE, &valueList);
-
-
-
-/*!
-					xcb_xfixes_set_picture_clip_region(connection, picture, region, 0, 0);
-					xcb_render_composite(connection, XCB_RENDER_PICT_OP_OVER, picture, XCB_NONE, rootPicture, 0, 0, 0, 0, eventX, eventY, eventW, eventH);
-					xcb_render_free_picture(connection, picture);
-*/
-				}
-
-
-
-				xcb_xfixes_destroy_region(connection, region);
-			}
-		}else{
-/*!
-			xcb_xfixes_region_t region = xcb_generate_id(connection);
-			xcb_render_picture_t picture = xcb_generate_id(connection);
-			xcb_xfixes_create_region(connection, region, 1, geometry);
-
-
-
-			xcb_render_create_picture(connection, picture, window, (*client).format, XCB_NONE, NULL);
-			xcb_xfixes_set_picture_clip_region(connection, picture, region, 0, 0);
-
-
-
-			xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, picture, XCB_NONE, rootPicture, 0, 0, 0, 0, (*geometry).x, (*geometry).y, (*geometry).width, (*geometry).height);
-
-
-
-			xcb_xfixes_destroy_region(connection, region);
-			xcb_render_free_picture(connection, picture);
-*/
-			fprintf(stdout, "---------------------------------------------not a rectangle\n");
-		}
-
-
-
-		{
-			xcb_xfixes_region_t region = xcb_generate_id(connection);
-			xcb_xfixes_create_region(connection, region, 1, geometry);
-			xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region);
-			xcb_xfixes_destroy_region(connection, region);
-		}
-#endif
-
-#ifdef a
-		{
-			xcb_xfixes_region_t region = xcb_generate_id(connection);
-			xcb_xfixes_create_region(connection, region, 1, geometry);
-			{
-				xcb_render_picture_t picture = xcb_generate_id(connection);
-				xcb_render_create_picture(connection, picture, window, (*client).format, XCB_NONE, NULL);
-				{
-					xcb_xfixes_set_picture_clip_region(connection, picture, region, 0, 0);
-					xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region);
-					xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, picture, XCB_NONE, rootPicture, 0, 0, 0, 0, (*geometry).x, (*geometry).y, (*geometry).width, (*geometry).height);
-				}
-				xcb_render_free_picture(connection, picture);
-			}
-			xcb_xfixes_destroy_region(connection, region);
-		}
-#endif
