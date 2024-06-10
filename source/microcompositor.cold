@@ -63,6 +63,10 @@
 	keep non-input-output windows?
 */
 
+/*!
+	ordering when changing workspaces is still messing up.
+*/
+
 
 
 
@@ -711,7 +715,11 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 
-		/*! good idea if we calculate it's viewable area? */
+		/*!
+			good idea if we calculate it's viewable area?
+
+			maybe add it without fancy damage stuff. just calculate it's viewable area and draw the wallpaper there
+		*/
 
 		/*! if(addClient((*screen).root)){
 			*orderedClientOffsetCurrent = orderedClientOffsetCurrent - orderedClientOffsetStart;
@@ -825,7 +833,7 @@ int main(const int argumentAmount, const char *const *argument){
 		}
 		jmp unexpectedEvent;
 	}
-	visibilityNotifyEvent: fprintf(stdout, "visibility notify\n"); {
+	visibilityNotifyEvent:{
 		#define event0 /*-*/ ((xcb_visibility_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		if(client){
@@ -840,7 +848,7 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp eventLoop;
 		#undef  event0
 	}
-	createNotifyEvent: fprintf(stdout, "create notify\n"); {
+	createNotifyEvent:{
 		#define event0 /*-*/ ((xcb_create_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		queryTree();
@@ -853,7 +861,7 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp eventLoop;
 		#undef  event0
 	}
-	destroyNotifyEvent: fprintf(stdout, "destroy notify\n"); {
+	destroyNotifyEvent:{
 		#define event0 /*-*/ ((xcb_destroy_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		queryTree();
@@ -865,7 +873,7 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp eventLoop;
 		#undef  event0
 	}
-	unmapNotifyEvent: fprintf(stdout, "unmap notify\n"); {
+	unmapNotifyEvent:{
 		#define event0 /*-*/ ((xcb_unmap_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		if(client){
@@ -880,7 +888,7 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp drawRegion;
 		#undef  event0
 	}
-	mapNotifyEvent: fprintf(stdout, "map notify\n"); {
+	mapNotifyEvent:{
 		#define event0 /*-*/ ((xcb_map_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		if(client){
@@ -895,7 +903,7 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp eventLoop;
 		#undef  event0
 	}
-	reparentNotifyEvent: fprintf(stdout, "reparent notify\n"); {
+	reparentNotifyEvent:{
 		#define event0 /*-*/ ((xcb_reparent_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		queryTree();
@@ -916,7 +924,7 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp eventLoop;
 		#undef  event0
 	}
-	configureNotifyEvent: fprintf(stdout, "configure notify\n"); {
+	configureNotifyEvent:{
 		#define event0 /*-*/ ((xcb_configure_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		if(!client){
@@ -941,9 +949,8 @@ int main(const int argumentAmount, const char *const *argument){
 		jmp eventLoop;
 		#undef  event0
 	}
-	circulateNotifyEvent: fprintf(stdout, "---------------circulate notify\n"); {
+	circulateNotifyEvent:{
 		#define event0 /*-*/ ((xcb_circulate_notify_event_t *)event0)
-		queryTree();
 		updateOrder();
 		calculateViewableWindowSizes();
 		jmp eventLoop;
@@ -959,6 +966,7 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 
+			fprintf(stdout, "pixmap updated\n");
 		}
 		jmp eventLoop;
 		#undef  event0
@@ -1019,21 +1027,20 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 		{
+			/*! edit this later */
+
 			xcb_rectangle_t *rectangleStart = malloc(100 * sizeof(xcb_rectangle_t));
+
+
+
 			xcb_rectangle_t *rectangleCurrent = rectangleStart;
 			uint amount = 0;
-
-
-
 			const Rectangle *rectangle = (*client).rectangle;
 			const Rectangle *const wall = rectangle + (*client).allocated;
 			int x;
 			int y;
 			int w;
 			int h;
-
-
-
 			if(!rectangleStart){
 				jmp eventLoop;
 			}
@@ -1397,6 +1404,13 @@ CALCULATEVIEWABLEWINDOWSIZES(){
 	ret;
 }
 ADDCLIENT(){
+
+
+
+	/*! even if some shit fails, add the client with defaults */
+
+
+
 	xcb_get_window_attributes_cookie_t attributesCookie;
 	xcb_get_geometry_cookie_t geometryCookie;
 	xcb_get_window_attributes_reply_t *attributesReply;
@@ -1413,6 +1427,7 @@ ADDCLIENT(){
 	attributesReply = xcb_wait_for_reply(connection, attributesCookie, NULL);
 	geometryReply = xcb_wait_for_reply(connection, geometryCookie, NULL);
 	if(!attributesReply or !geometryReply /*! or (*attributesReply)._class != XCB_WINDOW_CLASS_INPUT_OUTPUT */ ){
+		fprintf(stdout, "could not add client due to replies\n");
 		jmp emergencyExit;
 	}
 
@@ -1455,7 +1470,7 @@ ADDCLIENT(){
 	(*client).format = XCB_NONE;
 	(*client).picture = XCB_NONE;
 
-	/*! maybe note that the window is mapped, unmapped or just unviewable */
+
 
 	(*client).mapped = (*attributesReply).map_state == XCB_MAP_STATE_VIEWABLE;
 
@@ -1495,40 +1510,15 @@ ADDCLIENT(){
 		ret false;
 	}
 }
-QUERYTREE(){
-	const xcb_query_tree_cookie_t cookie = xcb_query_tree_unchecked(connection, (*screen).root);
-	if(treeReply){
-		free(treeReply);
-	}
-	treeReply = xcb_wait_for_reply(connection, cookie, NULL);
-	ret;
-}
 UPDATEORDER(){
-	/*! what if treeReply == NULL */
-/*!
 	if(treeReply){
-		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
-		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
-		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
-		findClientWindowLoop:{
-			xcb_get_window_attributes_reply_t *attributesReply = xcb_wait_for_reply(connection, xcb_get_window_attributes_unchecked(connection, *windowCurrent), NULL);
-			if(!attributesReply or (*attributesReply)._class != XCB_WINDOW_CLASS_INPUT_OUTPUT){
-				Client *const client = findClient(*windowCurrent);
-				if(client){
-					*orderedClientOffsetCurrent = client - clientStart;
-				}else{
-					*orderedClientOffsetCurrent = -1;
-					fprintf(stdout, "window not found in update order\n");
-				}
-			}
-			if(inc windowCurrent < windowWall){
-				inc orderedClientOffsetCurrent;
-				jmp findClientWindowLoop;
-			}
-		}
-	}
-*/
-	if(treeReply){
+
+
+
+		/*! optimize this */
+
+
+
 		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
 		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
 		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
@@ -1538,7 +1528,9 @@ UPDATEORDER(){
 				*orderedClientOffsetCurrent = client - clientStart;
 			}else{
 				*orderedClientOffsetCurrent = -1;
-				/*! fprintf(stdout, "window not found in update order\n"); */
+				if(*windowCurrent == overlayWindow){
+					dec orderedClientOffsetCurrent;
+				}
 			}
 			if(inc windowCurrent < windowWall){
 				inc orderedClientOffsetCurrent;
@@ -1583,12 +1575,21 @@ MAPWINDOW(){
 
 
 
+QUERYTREE(){
+	const xcb_query_tree_cookie_t cookie = xcb_query_tree_unchecked(connection, (*screen).root);
+	if(treeReply){
+		free(treeReply);
+	}
+	treeReply = xcb_wait_for_reply(connection, cookie, NULL);
+	ret;
+}
 FINDCLIENT(){
-	const uint8 *current = (void *)&(*clientStart).window;
+	const uint8 *const firstWindow = (void *)&(*clientStart).window;
+	const uint8 *current = firstWindow;
 	jmp findClientLoop;
 	findClientLoop:{
 		if(*(xcb_window_t *)current == window){
-			ret (void *)(current - ((uint8 *)&(*clientStart).window - (uint8 *)clientStart));
+			ret (void *)(current - (firstWindow - (uint8 *)clientStart));
 		}
 		if((current += sizeof(Client)) < (uint8 *)clientWall){
 			jmp findClientLoop;
@@ -1597,13 +1598,14 @@ FINDCLIENT(){
 	}
 }
 REMOVECLIENT(){
-	xcb_damage_destroy(connection, (*client).damage);
+	if((*client).damage){
+		xcb_damage_destroy(connection, (*client).damage);
+	}
 	if((*client).picture){
 		xcb_render_free_picture(connection, (*client).picture);
 	}
-	*client = *(clientWall - 1);
+	*client = *(dec clientWall);
 	dec clientAllocated;
-	dec clientWall;
 	ret;
 }
 PRINTERROR(){
