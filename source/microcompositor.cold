@@ -73,6 +73,8 @@
 	gnome screenshot dragging the window to take a custom size screenshot is not appearing at all when it should just be a black box and causing errors
 */
 
+
+
 #ifdef a
 xcb_window_t fastFindWindowList[5] = {
 	  XCB_NONE
@@ -172,40 +174,40 @@ SOFTWARE. */
 /*!}*/
 
 /*!defines:{*/
-	#define DEBUG /*--------------------------*/ (true)
+	#define DEBUG /*-----------------------------*/ (true)
 
-	#define _EMPTY_MACRO /*-------------------*/
+	#define _EMPTY_MACRO /*----------------------*/
 
-	#define FINDCLIENT() /*-------------------*/ local Client                  *findClient(const xcb_window_t window)
-	#define REMOVECLIENT() /*-----------------*/ local void                     removeClient(Client *const client)
-	#define UNMAPWINDOW() /*------------------*/ local void                     unmapWindow(Client *const client)
-	#define MAPWINDOW() /*--------------------*/ local void                     mapWindow(Client *const client)
-	#define ADDCLIENT() /*--------------------*/ local bool                     addClient(const xcb_window_t window)
-	#define CONFIGURECLIENT() /*--------------*/ local void                     configureClient(Client *const client)
-	#define QUERYTREE() /*--------------------*/ local void                     queryTree(void)
-	#define UPDATEORDER() /*------------------*/ local void                     updateOrder(void)
-	#define FINDINTERSECTINGRECTANGLE() /*----*/ local bool                     findIntersectingRectangle(int leftX0, int topY0, int width0, int height0, int leftX1, int topY1, int width1, int height1, int *retX, int *retY, int *retW, int *retH)
-	#define SPLITRECTANGLE() /*---------------*/ local void                     splitRectangle(int x, int y, int w, int h, int interX, int interY, int interW, int interH, uint *size, uint *allocated, xcb_rectangle_t **rectangle)
-	#define CALCULATEVIEWABLEWINDOWSIZES() /*-*/ local void                     calculateViewableWindowSizes(void)
-	#define CREATEWALLPAPER() /*--------------*/ local void                     createWallpaper(void)
-	#define FINDFORMAT() /*-------------------*/ local xcb_render_pictformat_t  findFormat(const xcb_visualid_t visual)
-	#define COPYTOBUFFER() /*-----------------*/ local void                     copyToBuffer(const xcb_xfixes_region_t region, const xcb_render_picture_t picture)
-	#define GETCLIENTINTERSECTINGRECTANGLES() /*-*/ local uint                  getClientIntersectingRectangles(const Client *const client, const int eventX, const int eventY, const int eventW, const int eventH)
+	#define FINDCLIENT() /*----------------------*/ local Client                  *findClient(const xcb_window_t window)
+	#define REMOVECLIENT() /*--------------------*/ local void                     removeClient(Client *const client)
+	#define UNMAPWINDOW() /*---------------------*/ local void                     unmapWindow(Client *const client)
+	#define MAPWINDOW() /*-----------------------*/ local void                     mapWindow(Client *const client)
+	#define ADDCLIENT() /*-----------------------*/ local bool                     addClient(const xcb_window_t window)
+	#define CONFIGURECLIENT() /*-----------------*/ local void                     configureClient(Client *const client)
+	#define QUERYTREE() /*-----------------------*/ local void                     queryTree(void)
+	#define UPDATEORDER() /*---------------------*/ local void                     updateOrder(void)
+	#define FINDINTERSECTINGRECTANGLE() /*-------*/ local bool                     findIntersectingRectangle(int leftX0, int topY0, int width0, int height0, int leftX1, int topY1, int width1, int height1, int *retX, int *retY, int *retW, int *retH)
+	#define SPLITRECTANGLE() /*------------------*/ local void                     splitRectangle(int x, int y, int w, int h, int interX, int interY, int interW, int interH, uint *size, uint *allocated, xcb_rectangle_t **rectangle)
+	#define CALCULATEVIEWABLEWINDOWSIZES() /*----*/ local void                     calculateViewableWindowSizes(void)
+	#define CREATEWALLPAPER() /*-----------------*/ local void                     createWallpaper(void)
+	#define FINDFORMAT() /*----------------------*/ local xcb_render_pictformat_t  findFormat(const xcb_visualid_t visual)
+	#define COPYTOBUFFER() /*--------------------*/ local void                     copyToBuffer(const xcb_xfixes_region_t region, const xcb_render_picture_t picture)
+	#define GETCLIENTINTERSECTINGRECTANGLES() /*-*/ local uint                     getClientIntersectingRectangles(const Client *const client, const int eventX, const int eventY, const int eventW, const int eventH)
 
 
-	#define PRINTERROR() /*-------------------*/ local void    printError(const char *const string)
-	#define OPENERRORSTREAM() /*--------------*/ local bool    openErrorStream(void)
-	#define CLOSEERRORSTREAM() /*-------------*/ local void    closeErrorStream(void)
-	#define PRINTCONNECTIONERROR() /*---------*/ local void    printConnectionError(void)
-	#define PRINTXCBERROR() /*----------------*/ local void    printXCBError(void)
+	#define PRINTERROR() /*----------------------*/ local void    printError(const char *const string)
+	#define OPENERRORSTREAM() /*-----------------*/ local bool    openErrorStream(void)
+	#define CLOSEERRORSTREAM() /*----------------*/ local void    closeErrorStream(void)
+	#define PRINTCONNECTIONERROR() /*------------*/ local void    printConnectionError(void)
+	#define PRINTXCBERROR() /*-------------------*/ local void    printXCBError(void)
 
-	#define xcb_wait_for_reply(a, b, c) /*----*/ (xcb_wait_for_reply(a, (b).sequence, c))
+	#define xcb_wait_for_reply(a, b, c) /*-------*/ (xcb_wait_for_reply(a, (b).sequence, c))
 
-	#define LITERAL_LENGTH(l) /*--------------*/ (sizeof(l) - 1)
+	#define LITERAL_LENGTH(l) /*-----------------*/ (sizeof(l) - 1)
 
-	#define _b(d, b) /*-----------------------*/ (d > (sizeof(#b) - 1)? 0 : ((*(#b + (sizeof(#b) - 1) - d) - 48) == 1) * ((uint64)1 << (d - 1)))
+	#define _b(d, b) /*--------------------------*/ (d > (sizeof(#b) - 1)? 0 : ((*(#b + (sizeof(#b) - 1) - d) - 48) == 1) * ((uint64)1 << (d - 1)))
 
-	#define b(b) /*---------------------------*/ ( \
+	#define b(b) /*------------------------------*/ ( \
 		  _b( 1, b) + _b( 2, b) + _b( 3, b) + _b( 4, b) + _b( 5, b) + _b( 6, b) + _b( 7, b) + _b( 8, b) \
 		+ _b( 9, b) + _b(10, b) + _b(11, b) + _b(12, b) + _b(13, b) + _b(14, b) + _b(15, b) + _b(16, b) \
 		+ _b(17, b) + _b(18, b) + _b(19, b) + _b(20, b) + _b(21, b) + _b(22, b) + _b(23, b) + _b(24, b) \
@@ -216,9 +218,9 @@ SOFTWARE. */
 		+ _b(57, b) + _b(58, b) + _b(59, b) + _b(60, b) + _b(61, b) + _b(62, b) + _b(63, b) + _b(64, b) \
 	)
 
-	#define VISUAL_FORMAT_PAIR_BLOCK_SIZE /*--*/ (4)
-	#define RECTANGLE_BLOCK_SIZE /*-----------*/ (8)
-	#define CLIENT_BLOCK_SIZE /*--------------*/ (128)
+	#define VISUAL_FORMAT_PAIR_BLOCK_SIZE /*-----*/ (4)
+	#define RECTANGLE_BLOCK_SIZE /*--------------*/ (8)
+	#define CLIENT_BLOCK_SIZE /*-----------------*/ (128)
 /*!}*/
 
 /*!defs:{*/
@@ -281,7 +283,6 @@ SOFTWARE. */
 
 
 	Client rootClient;
-	xcb_window_t backgroundWindow;
 	xcb_atom_t pixmapAtom;
 	xcb_atom_t rootPixmapAtom;
 	xcb_render_pictformat_t rootFormat;
@@ -866,6 +867,13 @@ int main(const int argumentAmount, const char *const *argument){
 		#define event0 /*-*/ ((xcb_reparent_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		queryTree();
+
+
+
+		/*! could maybe draw something here */
+
+
+
 		if((*event0).parent == (*screen).root){
 			if(!client){
 				if(addClient((*event0).window)){
@@ -900,7 +908,7 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 
-		/*! maybe draw somewwhere here but i don't have anything given to me to draw */
+		/*! maybe draw somewhere here but i don't have anything given to me to draw */
 
 
 
@@ -934,21 +942,18 @@ int main(const int argumentAmount, const char *const *argument){
 		if(window == overlayWindow){
 			fprintf(stdout, "overlay damaged\n");
 		}
-		if(window == backgroundWindow){
-			fprintf(stdout, "-------------------------------background damaged\n");
-		}
 		if(!client or !(*client).mapped or !(*client).viewable){
 			jmp eventLoop;
 		}
-
-
-
 		geometry = &(*event0).geometry;
+
+
+
 		{
 			const xcb_xfixes_region_t region = xcb_generate_id(connection);
 			xcb_xfixes_create_region(connection, region, 1, geometry);
-			xcb_damage_subtract(connection, (*client).damage, XCB_NONE, XCB_NONE);
-			/*! xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region); */
+			/*! xcb_damage_subtract(connection, (*client).damage, XCB_NONE, XCB_NONE); */
+			xcb_damage_subtract(connection, (*client).damage, XCB_NONE, region);
 			xcb_xfixes_destroy_region(connection, region);
 		}
 
@@ -1410,10 +1415,6 @@ ADDCLIENT(){
 
 
 
-	/*! create pitures and whatever else here to not have to do it every time on damage notify */
-
-
-
 	xcb_get_window_attributes_cookie_t attributesCookie;
 	xcb_get_geometry_cookie_t geometryCookie;
 	xcb_get_window_attributes_reply_t *attributesReply;
@@ -1456,8 +1457,8 @@ ADDCLIENT(){
 	if(geometryReply){
 		(*client).x = (*geometryReply).x;
 		(*client).y = (*geometryReply).y;
-		(*client).w = (*geometryReply).width;
-		(*client).h = (*geometryReply).height;
+		(*client).w = (*geometryReply).width + 2 * (*geometryReply).border_width;
+		(*client).h = (*geometryReply).height + 2 * (*geometryReply).border_width;
 	}else{
 		(*client).x = (*screen).width_in_pixels;
 		(*client).y = (*screen).height_in_pixels;
@@ -1552,8 +1553,8 @@ CONFIGURECLIENT(){
 	(*client).picture = xcb_generate_id(connection);
 	(*client).x = (*event0).x;
 	(*client).y = (*event0).y;
-	(*client).w = (*event0).width;
-	(*client).h = (*event0).height;
+	(*client).w = (*event0).width + 2 * (*event0).border_width;
+	(*client).h = (*event0).height + 2 * (*event0).border_width;
 	(*client).viewable = !((*client).x + (*client).w < 1 or (*client).x >= (*screen).width_in_pixels or (*client).y + (*client).h < 1 or (*client).y >= (*screen).height_in_pixels);
 	xcb_render_create_picture(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL);
 	ret;
