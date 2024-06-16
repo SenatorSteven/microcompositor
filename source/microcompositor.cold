@@ -44,10 +44,6 @@
 */
 
 /*!
-	ordering when changing workspaces is still messing up.
-*/
-
-/*!
 	store windows each client is intersecting with?
 */
 
@@ -248,7 +244,10 @@ SOFTWARE. */
 
 		uint8 /*-------------------*/ depth;
 		bool /*--------------------*/ viewable;
-		uint8 /*-------------------*/ pad[4];
+
+		bool /*--------------------*/ useSpecialEffect;
+
+		uint8 /*-------------------*/ pad[3];
 	} Client;
 
 	def struct{
@@ -766,6 +765,7 @@ int main(const int argumentAmount, const char *const *argument){
 			to XCB_EXPOSE: /*------------*/ jmp unexpectedEvent;
 			to XCB_GRAPHICS_EXPOSURE: /*-*/ jmp unexpectedEvent;
 			to XCB_NO_EXPOSURE: /*-------*/ jmp unexpectedEvent;
+#ifdef a
 			to XCB_VISIBILITY_NOTIFY: /*-*/ jmp visibilityNotifyEvent;
 			to XCB_CREATE_NOTIFY: /*-----*/ jmp createNotifyEvent;
 			to XCB_DESTROY_NOTIFY: /*----*/ jmp destroyNotifyEvent;
@@ -780,7 +780,7 @@ int main(const int argumentAmount, const char *const *argument){
 			to XCB_CIRCULATE_NOTIFY: /*--*/ jmp circulateNotifyEvent;
 			to XCB_CIRCULATE_REQUEST: /*-*/ jmp unexpectedEvent;
 			to XCB_PROPERTY_NOTIFY: /*---*/ jmp propertyNotifyEvent;
-#ifdef a
+#endif
 			to XCB_VISIBILITY_NOTIFY: /*-*/ fprintf(stdout, "visibility notify\n"); jmp visibilityNotifyEvent;
 			to XCB_CREATE_NOTIFY: /*-----*/ fprintf(stdout, "create notify\n"); jmp createNotifyEvent;
 			to XCB_DESTROY_NOTIFY: /*----*/ fprintf(stdout, "destroy notify\n"); jmp destroyNotifyEvent;
@@ -795,7 +795,7 @@ int main(const int argumentAmount, const char *const *argument){
 			to XCB_CIRCULATE_NOTIFY: /*--*/ fprintf(stdout, "circulate notify\n"); jmp circulateNotifyEvent;
 			to XCB_CIRCULATE_REQUEST: /*-*/ jmp unexpectedEvent;
 			to XCB_PROPERTY_NOTIFY: /*---*/ fprintf(stdout, "property notify\n"); jmp propertyNotifyEvent;
-#endif
+
 			to XCB_SELECTION_CLEAR: /*---*/ jmp unexpectedEvent;
 			to XCB_SELECTION_REQUEST: /*-*/ jmp unexpectedEvent;
 			to XCB_SELECTION_NOTIFY: /*--*/ jmp unexpectedEvent;
@@ -826,11 +826,11 @@ int main(const int argumentAmount, const char *const *argument){
 		#define event0 /*-*/ ((xcb_visibility_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
 		if(client){
-			/*! if((*event0).state == XCB_VISIBILITY_FULLY_OBSCURED){
+			if((*event0).state == XCB_VISIBILITY_FULLY_OBSCURED){
 				unmapWindow(client);
 			}else{
 				mapWindow(client);
-			} */
+			}
 			drawWallpaper();
 			calculateViewableWindowSizes();
 			jmp drawRegion;
@@ -898,13 +898,8 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 
-		/*! program crashes here reparent1 is reached (seems to be an addClient error) */
-
-
-
 		if((*event0).parent == (*screen).root){
 			if(!client){
-				fprintf(stdout, "reparent1\n");
 				if(addClient((*event0).window, NULL)){
 					updateOrder();
 					drawWallpaper();
@@ -1494,11 +1489,11 @@ ADDCLIENT(){
 		ret false;
 	}
 	attributesCookie = xcb_get_window_attributes_unchecked(connection, window);
-	if(!event0){
+	if(!event){
 		geometryCookie = xcb_get_geometry_unchecked(connection, window);
 	}
 	attributesReply = xcb_wait_for_reply(connection, attributesCookie, NULL);
-	if(!event0){
+	if(!event){
 		geometryReply = xcb_wait_for_reply(connection, geometryCookie, NULL);
 	}
 
@@ -1518,7 +1513,7 @@ ADDCLIENT(){
 
 
 
-	if(!attributesReply or (!event0 and !geometryReply)){
+	if(!attributesReply or (!event and !geometryReply)){
 		fprintf(stdout, "could not add client %x due to replies\n", window);
 		jmp emergencyExit;
 	}
@@ -1548,7 +1543,7 @@ ADDCLIENT(){
 
 
 
-	if(event0){
+	if(event){
 		(*client).x = (*event).x;
 		(*client).y = (*event).y;
 		(*client).w = (*event).width + 2 * (*event).border_width;
@@ -1574,10 +1569,10 @@ ADDCLIENT(){
 	(*client).format = findFormat((*client).visual);
 	(*client).damage = XCB_NONE;
 	(*client).picture = XCB_NONE;
+
+
+
 	(*client).mapped = (*attributesReply).map_state != XCB_MAP_STATE_UNMAPPED;
-
-
-
 	(*client).viewable = !((*client).rightX < 1 or (*client).x >= (*screen).width_in_pixels or (*client).bottomY < 1 or (*client).y >= (*screen).height_in_pixels);
 
 
@@ -1603,6 +1598,10 @@ ADDCLIENT(){
 
 		xcb_render_create_picture_checked(connection, (*client).picture, window, (*client).format, XCB_NONE, NULL);
 	}
+
+
+
+	(*client).useSpecialEffect = false;
 
 
 
@@ -1732,6 +1731,17 @@ GETCLIENTINTERSECTINGRECTANGLES(){
 	}
 }
 UNMAPWINDOW(){
+
+
+
+	/*! this has been presumed to mess up sometimes */
+
+
+
+	/*! can be theoretically much slower for high amount of overlapping windows but who cares honestly */
+
+
+
 	(*client).mapped = false;
 	{
 		const uint *offsetCurrent = orderedClientOffsetStart;
@@ -1763,8 +1773,6 @@ UNMAPWINDOW(){
 
 
 						/*! optimize further to avoid overdrawing */
-
-						/*! first time can mess up...? */
 
 
 
