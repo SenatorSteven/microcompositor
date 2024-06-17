@@ -68,7 +68,11 @@
 */
 
 /*!
-	crashing post-suspend?
+	crashing post-suspend? maybe just a result of a mapped client offset == -1
+*/
+
+/*!
+	microsound has been observed to be completely black when the compositor is already running and then microsound is run
 */
 
 
@@ -244,10 +248,8 @@ SOFTWARE. */
 
 		bool /*--------------------*/ shaped;
 		bool /*--------------------*/ mapped;
-
 		uint8 /*-------------------*/ depth;
 		bool /*--------------------*/ viewable;
-
 		bool /*--------------------*/ useSpecialEffect;
 
 		uint8 /*-------------------*/ pad[3];
@@ -275,7 +277,8 @@ SOFTWARE. */
 
 
 
-	const uint32 windowValueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+	/*! const uint32 windowValueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY; */
+	const uint32 windowValueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
 	uint damageBaseEvent;
 	uint damageBaseError;
 	uint renderBaseEvent;
@@ -719,7 +722,8 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 	{
-		const uint32 valueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE;
+		/*! const uint32 valueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE; */
+		const uint32 valueList = XCB_EVENT_MASK_VISIBILITY_CHANGE | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE;
 		xcb_change_window_attributes(connection, (*screen).root, XCB_CW_EVENT_MASK, &valueList);
 	}
 
@@ -853,9 +857,13 @@ int main(const int argumentAmount, const char *const *argument){
 	visibilityNotifyEvent:{
 		#define event0 /*-*/ ((xcb_visibility_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
+		if(!client){
+			fprintf(stdout, "client not found on visibilitynotify\n");
+		}
 		if(client){
 			if((*event0).state == XCB_VISIBILITY_FULLY_OBSCURED){
 				unmapWindow(client);
+				drawBelowClient(client);
 			}else{
 				mapWindow(client);
 			}
@@ -887,6 +895,10 @@ int main(const int argumentAmount, const char *const *argument){
 		queryTree();
 		{
 			Client *const client = findClient((*event0).window);
+			fprintf(stdout, "looking for %x\n", (*event0).window);
+			if(!client){
+				fprintf(stdout, "client not found on destroynotify\n");
+			}
 			if(client){
 				removeClient(client);
 				updateOrder();
@@ -900,8 +912,12 @@ int main(const int argumentAmount, const char *const *argument){
 	unmapNotifyEvent:{
 		#define event0 /*-*/ ((xcb_unmap_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
+		if(!client){
+			fprintf(stdout, "client not found on unmapnotify\n");
+		}
 		if(client){
 			unmapWindow(client);
+			drawBelowClient(client);
 			calculateViewableWindowSizes();
 			drawWallpaper();
 		}
@@ -911,6 +927,9 @@ int main(const int argumentAmount, const char *const *argument){
 	mapNotifyEvent:{
 		#define event0 /*-*/ ((xcb_map_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
+		if(!client){
+			fprintf(stdout, "client not found on mapnotify\n");
+		}
 		if(client){
 			mapWindow(client);
 			calculateViewableWindowSizes();
@@ -941,15 +960,10 @@ int main(const int argumentAmount, const char *const *argument){
 				}
 				jmp eventLoop;
 			}
+			if(!client){
+				fprintf(stdout, "client not found on reparentnotify\n");
+			}
 			if(client){
-
-
-
-				/*! causes errors here */
-
-
-
-				fprintf(stdout, "reparent2\n");
 				removeClient(client);
 				updateOrder();
 				calculateViewableWindowSizes();
@@ -962,29 +976,30 @@ int main(const int argumentAmount, const char *const *argument){
 	configureNotifyEvent:{
 		#define event0 /*-*/ ((xcb_configure_notify_event_t *)event0)
 		Client *const client = findClient((*event0).window);
-		if((*event0).window == overlayWindow){
-			fprintf(stdout, "\n\n\noverlay in configure event?\n\n\n\n");
-			jmp eventLoop;
+		if(!client){
+			fprintf(stdout, "client not found on configurenotify\n");
 		}
 		if(!client){
 			jmp eventLoop;
 		}
+
+
+
+		/*! what doesn't work here properly? */
+
+		drawBelowClient(client);
 		configureClient(client);
 		updateOrder();
 		calculateViewableWindowSizes();
+
+
+
 		drawWallpaper();
 		jmp eventLoop;
 		#undef  event0
 	}
 	circulateNotifyEvent:{
 		#define event0 /*-*/ ((xcb_circulate_notify_event_t *)event0)
-
-
-
-		/*! maybe draw somewhere here but i don't have anything given to me to draw */
-
-
-
 		updateOrder();
 		calculateViewableWindowSizes();
 		drawWallpaper();
@@ -999,8 +1014,7 @@ int main(const int argumentAmount, const char *const *argument){
 		/*!
 			xcb_get_atom_name_reply_t *reply = xcb_get_atom_name_reply(connection, xcb_get_atom_name(connection, (*event0).atom), NULL);
 			if(reply){
-				int length = xcb_get_atom_name_name_length(reply);
-				printf("atom name: %.*s\n", length, xcb_get_atom_name_name(reply));
+				printf("atom name: %.*s\n", xcb_get_atom_name_name_length(reply), xcb_get_atom_name_name(reply));
 				free(reply);
 			}
 		*/
@@ -1019,11 +1033,8 @@ int main(const int argumentAmount, const char *const *argument){
 		const xcb_window_t window = (*event0).drawable;
 		Client *const client = findClient(window);
 		xcb_rectangle_t *geometry;
-		if(window == (*screen).root){
-			fprintf(stdout, "root damaged\n");
-		}
-		if(window == overlayWindow){
-			fprintf(stdout, "overlay damaged\n");
+		if(!client){
+			fprintf(stdout, "client not found on damagenotify\n");
 		}
 		if(!client or !(*client).mapped or !(*client).viewable){
 			jmp eventLoop;
@@ -1341,7 +1352,7 @@ CALCULATEVIEWABLEWINDOWSIZES(){
 		uint *wall = orderedClientOffsetStart + clientAllocated;
 		uint i = 0;
 		while(current < wall){
-			if(*current != -1){
+			if(*current != (uint)-1){
 				Client *client = clientStart + *current;
 				if((*client).mapped and (*client).viewable){
 					xcb_rectangle_t *rectangle = (*client).rectangle;
@@ -1485,17 +1496,42 @@ DRAWWALLPAPER(){
 	}
 	if(rootClient.allocated){
 		const xcb_xfixes_region_t region = xcb_generate_id(connection);
-		xcb_xfixes_create_region(connection, region, rootClient.allocated, rootClient.rectangle);
+		xcb_xfixes_create_region_checked(connection, region, rootClient.allocated, rootClient.rectangle);
 		{
-			xcb_xfixes_set_picture_clip_region(connection, wallpaperPicture, region, 0, 0);
-			xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, wallpaperPicture, XCB_NONE, rootPicture, 0, 0, 0, 0, 0, 0, (*screen).width_in_pixels, (*screen).height_in_pixels);
+			xcb_xfixes_set_picture_clip_region_checked(connection, wallpaperPicture, region, 0, 0);
+			xcb_render_composite_checked(connection, XCB_RENDER_PICT_OP_SRC, wallpaperPicture, XCB_NONE, rootPicture, 0, 0, 0, 0, 0, 0, (*screen).width_in_pixels, (*screen).height_in_pixels);
 		}
-		xcb_xfixes_destroy_region(connection, region);
+		xcb_xfixes_destroy_region_checked(connection, region);
 	}
 	ret;
 }
 ADDCLIENT(){
 	/*! hasOperation = true; fprintf(stdout, "--------------------adding client\n"); */
+
+	/*!
+		size = 0;
+		allocated = 0;
+		rectangle = NULL;
+
+		window = window;
+		damage = XCB_NONE;
+		format = XCB_NONE;
+		picture = XCB_NONE;
+
+		x = 0;
+		y = 0;
+		w = 0;
+		h = 0;
+		rightX = 0;
+		bottomY = 0;
+
+		shaped = false;
+		mapped = false;
+		depth = 24;
+		viewable = false;
+		useSpecialEffect = false;
+	*/
+
 	{
 		xcb_get_window_attributes_cookie_t attributesCookie;
 		xcb_get_geometry_cookie_t geometryCookie;
@@ -1629,6 +1665,14 @@ ADDCLIENT(){
 }
 UPDATEORDER(){
 	if(treeReply){
+		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
+		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
+
+
+
+
+
+
 
 
 
@@ -1636,8 +1680,6 @@ UPDATEORDER(){
 
 
 
-		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
-		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
 		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
 		jmp findClientWindowLoop;
 		findClientWindowLoop:{
@@ -1648,6 +1690,14 @@ UPDATEORDER(){
 				*orderedClientOffsetCurrent = -1;
 				if(*windowCurrent == overlayWindow){
 					dec orderedClientOffsetCurrent;
+				}else{
+
+
+
+					fprintf(stdout, "invalid client offset\n");
+
+
+
 				}
 			}
 			if(inc windowCurrent < windowWall){
@@ -1655,6 +1705,15 @@ UPDATEORDER(){
 				jmp findClientWindowLoop;
 			}
 		}
+
+
+
+
+
+
+
+
+
 	}
 	ret;
 }
@@ -1703,31 +1762,17 @@ UNMAPWINDOW(){
 
 
 
-		xcb_render_free_picture_checked(connection, (*client).picture); /*! annoying */
+		xcb_render_free_picture_checked(connection, (*client).picture); /*! annoying on discord tray icon window delete */
 
 
 
 		(*client).picture = XCB_NONE;
 	}
-	drawBelowClient(client);
 	ret;
 }
 CONFIGURECLIENT(){
 	hasOperation = true; fprintf(stdout, "--------------------configuring client\n");
 	#define event0 /*-*/ ((xcb_configure_notify_event_t *)event0)
-
-
-
-	/*! can and does indeed cause errors */
-
-
-
-	/*! doesn't do anything because no windows seem to be beneath this one */
-
-	/*! drawBelowClient(client); */
-
-
-
 	(*client).x = (*event0).x;
 	(*client).y = (*event0).y;
 	(*client).w = (*event0).width + 2 * (*event0).border_width;
@@ -1736,9 +1781,9 @@ CONFIGURECLIENT(){
 	(*client).bottomY = (*client).y + (*client).h;
 	(*client).viewable = !((*client).rightX < 1 or (*client).x >= (*screen).width_in_pixels or (*client).bottomY < 1 or (*client).y >= (*screen).height_in_pixels);
 	if((*client).picture){
-		xcb_render_free_picture(connection, (*client).picture);
+		xcb_render_free_picture_checked(connection, (*client).picture); /*! annoying on window delete */
 		(*client).picture = xcb_generate_id(connection);
-		xcb_render_create_picture(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL);
+		xcb_render_create_picture_checked(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL); /*! annoying on window delete */
 	}
 	ret;
 	#undef  event0
@@ -1752,11 +1797,7 @@ DRAWBELOWCLIENT(){
 
 
 
-	/*! flashing is still a thing */
-
-
-
-	/*! can cause crashes. */
+	/*! flashing is still a thing... or is it? */
 
 
 
@@ -1768,16 +1809,6 @@ DRAWBELOWCLIENT(){
 		const uint eventW = (*client).w;
 		const uint eventH = (*client).h;
 		xcb_xfixes_region_t localRegion = XCB_NONE;
-
-
-
-
-
-
-
-
-
-		fprintf(stdout, "above\n");
 		jmp loop;
 		loop:{
 			if(offsetCurrent < offsetWall){
@@ -1790,16 +1821,16 @@ DRAWBELOWCLIENT(){
 					const uint amount = getClientIntersectingRectangles(current, x, y, x + w, y + h);
 					if(amount){
 						const xcb_xfixes_region_t region = xcb_generate_id(connection);
-						xcb_xfixes_create_region(connection, region, amount, rectangleStart);
+						xcb_xfixes_create_region_checked(connection, region, amount, rectangleStart);
 						{
-							xcb_xfixes_set_picture_clip_region(connection, (*current).picture, region, 0, 0);
-							xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, (*current).picture, XCB_NONE, bufferPicture, x - (*current).x, y - (*current).y, 0, 0, x, y, w, h);
+							xcb_xfixes_set_picture_clip_region_checked(connection, (*current).picture, region, 0, 0);
+							xcb_render_composite_checked(connection, XCB_RENDER_PICT_OP_SRC, (*current).picture, XCB_NONE, bufferPicture, x - (*current).x, y - (*current).y, 0, 0, x, y, w, h);
 						}
 						if(!localRegion){
 							localRegion = region;
 						}else{
-							xcb_xfixes_union_region(connection, region, localRegion, localRegion);
-							xcb_xfixes_destroy_region(connection, region);
+							xcb_xfixes_union_region_checked(connection, region, localRegion, localRegion);
+							xcb_xfixes_destroy_region_checked(connection, region);
 						}
 					}
 				}
@@ -1807,20 +1838,10 @@ DRAWBELOWCLIENT(){
 				jmp loop;
 			}
 		}
-		fprintf(stdout, "below\n");
-
-
-
-
-
-
-
-
-
 		if(localRegion){
-			xcb_xfixes_set_picture_clip_region(connection, bufferPicture, localRegion, 0, 0);
-			xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, bufferPicture, XCB_NONE, rootPicture, eventX, eventY, 0, 0, eventX, eventY, eventW, eventH);
-			xcb_xfixes_destroy_region(connection, localRegion);
+			xcb_xfixes_set_picture_clip_region_checked(connection, bufferPicture, localRegion, 0, 0);
+			xcb_render_composite_checked(connection, XCB_RENDER_PICT_OP_SRC, bufferPicture, XCB_NONE, rootPicture, eventX, eventY, 0, 0, eventX, eventY, eventW, eventH);
+			xcb_xfixes_destroy_region_checked(connection, localRegion);
 		}
 	}
 	ret;
@@ -1830,18 +1851,18 @@ MAPWINDOW(){
 	(*client).mapped = true;
 	if(!(*client).picture){
 		(*client).picture = xcb_generate_id(connection);
-		xcb_render_create_picture(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL);
+		xcb_render_create_picture_checked(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL); /*! annoying on discord tray window create, match error */
 	}
 	{
 		const uint amount = getClientIntersectingRectangles(client, (*client).x, (*client).y, (*client).rightX, (*client).bottomY);
 		if(amount){
 			const xcb_xfixes_region_t region = xcb_generate_id(connection);
-			xcb_xfixes_create_region(connection, region, amount, rectangleStart);
+			xcb_xfixes_create_region_checked(connection, region, amount, rectangleStart);
 			{
-				xcb_xfixes_set_picture_clip_region(connection, (*client).picture, region, 0, 0);
-				xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, (*client).picture, XCB_NONE, rootPicture, 0, 0, 0, 0, (*client).x, (*client).y, (*client).w, (*client).h);
+				xcb_xfixes_set_picture_clip_region_checked(connection, (*client).picture, region, 0, 0);
+				xcb_render_composite_checked(connection, XCB_RENDER_PICT_OP_SRC, (*client).picture, XCB_NONE, rootPicture, 0, 0, 0, 0, (*client).x, (*client).y, (*client).w, (*client).h);
 			}
-			xcb_xfixes_destroy_region(connection, region);
+			xcb_xfixes_destroy_region_checked(connection, region);
 		}
 	}
 	ret;
@@ -1852,8 +1873,6 @@ DRAWALLCLIENTS(){
 
 
 	/*! verify it works properly */
-
-	/*! change XCB_RENDER_PICT_OP_SRC to XCB_RENDER_PICT_OP_OVER later */
 
 
 
@@ -1901,13 +1920,21 @@ REMOVECLIENT(){
 
 
 
-		xcb_damage_destroy_checked(connection, (*client).damage); /*! annoying */
+		xcb_damage_destroy_checked(connection, (*client).damage); /*! annoying on window deleting */
+		(*client).damage = XCB_NONE; /*! ??? */
 
 
 
 	}
 	if((*client).picture){
-		xcb_render_free_picture(connection, (*client).picture);
+
+
+
+		xcb_render_free_picture_checked(connection, (*client).picture); /*! annoying on window deleting */
+		(*client).picture = XCB_NONE; /*! ??? */
+
+
+
 	}
 	*client = *(dec clientWall);
 	dec clientAllocated;
