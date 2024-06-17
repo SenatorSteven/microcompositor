@@ -1,22 +1,16 @@
 /*!
-	check for monitor change issues
-*/
-
-/*!
-	rectangle splitting can create rectangles that can be combined into one (yikes)
-*/
-
-/*!
 	fix all kinds of issues that can be safely called basic and then move onto 32 bit window handling.
-
-
 
 	basic includes faultless composition at idle-tier speeds where all windows are treated as 24 bit.
 	then deal with how the wallpaper works and then deal with 32 bit windows.
 */
 
 /*!
-	add border width to width and height...
+	check for monitor change issues
+*/
+
+/*!
+	rectangle splitting can create rectangles that can be combined into one (yikes)
 */
 
 /*!
@@ -56,21 +50,25 @@
 */
 
 /*!
-	windows spawned via tray icons cause only errors.
-
-	discord specifically, steam doesn't.
-*/
-
-/*!
-	creating a new window over the vivaldi popup will hide the vivaldi popup, and it's only a visual problem, basically exactly like the discord tray.
-*/
-
-/*!
 	gnome screenshot dragging the window to take a custom size screenshot is not appearing at all when it should just be a black box and causing errors
+
+	the black around the window might appear but we must sort out 32 bit windows first
 */
 
 /*!
 	on creating a window and mapping it we get a flash on the monitor that shouldn't be there
+*/
+
+/*!
+	map notify (discord tray) causes 3 errors
+*/
+
+/*!
+	destroy notify causes 4 errors though probably doesn't break anything. investigate.
+*/
+
+/*!
+	crashing post-suspend?
 */
 
 
@@ -183,7 +181,7 @@ SOFTWARE. */
 	#define UNMAPWINDOW() /*---------------------*/ local void                     unmapWindow(Client *const client)
 	#define DRAWBELOWCLIENT() /*-----------------*/ local void                     drawBelowClient(const Client *const client)
 	#define MAPWINDOW() /*-----------------------*/ local void                     mapWindow(Client *const client)
-	#define ADDCLIENT() /*-----------------------*/ local bool                     addClient(const xcb_window_t window, const void *const event)
+	#define ADDCLIENT() /*-----------------------*/ local bool                     addClient(const xcb_window_t window)
 	#define CONFIGURECLIENT() /*-----------------*/ local void                     configureClient(Client *const client)
 	#define QUERYTREE() /*-----------------------*/ local void                     queryTree(void)
 	#define UPDATEORDER() /*---------------------*/ local void                     updateOrder(void)
@@ -192,7 +190,7 @@ SOFTWARE. */
 	#define CALCULATEVIEWABLEWINDOWSIZES() /*----*/ local void                     calculateViewableWindowSizes(void)
 	#define CREATEWALLPAPER() /*-----------------*/ local void                     createWallpaper(void)
 	#define DRAWWALLPAPER() /*-------------------*/ local void                     drawWallpaper(void)
-	#define FINDFORMAT() /*----------------------*/ local xcb_render_pictformat_t  findFormat(const xcb_visualid_t visual)
+	#define FINDFORMAT() /*----------------------*/ local xcb_render_pictformat_t  findFormat(const xcb_visualid_t visual, const uint8 depth)
 	#define GETCLIENTINTERSECTINGRECTANGLES() /*-*/ local uint                     getClientIntersectingRectangles(const Client *const client, const int eventLeftX, const int eventTopY, const int eventRightX, const int eventBottomY)
 	#define DRAWALLCLIENTS() /*------------------*/ local void                     drawAllClients(void)
 
@@ -303,6 +301,8 @@ SOFTWARE. */
 	uint visualAllocated;
 	xcb_render_pictvisual_t *visualStart;
 	xcb_render_pictvisual_t *visualWall;
+	uint defaultOpaqueVisualOffset;
+	uint defaultTransparentVisualOffset;
 
 
 
@@ -495,6 +495,14 @@ int main(const int argumentAmount, const char *const *argument){
 			fprintf(stdout, "%s: could not query shape extension\n", programName);
 		}
 	}
+	{
+		fprintf(stdout, "damageBaseEvent: %u\n", damageBaseEvent);
+		fprintf(stdout, "damageBaseError: %u\n", damageBaseError);
+		fprintf(stdout, "renderBaseEvent: %u\n", renderBaseEvent);
+		fprintf(stdout, "renderBaseError: %u\n", renderBaseError);
+		fprintf(stdout, " randrBaseEvent: %u\n", randrBaseEvent);
+		fprintf(stdout, " randrBaseError: %u\n", randrBaseError);
+	}
 
 
 
@@ -632,6 +640,8 @@ int main(const int argumentAmount, const char *const *argument){
 			fprintf(stdout, "no visualStart\n");
 			visualSize = 0;
 		}
+		defaultOpaqueVisualOffset = 0;
+		defaultTransparentVisualOffset = 0;
 	}
 
 
@@ -655,7 +665,17 @@ int main(const int argumentAmount, const char *const *argument){
 						visualStart = temp;
 					}
 					if((*pictvisual).visual and (*pictvisual).format){
+						const uint8 depth = (*pictdepth.data).depth;
 						*current = *pictvisual;
+						if(depth == 24){
+							if(!defaultOpaqueVisualOffset){
+								defaultOpaqueVisualOffset = current - visualStart;
+							}
+						}elif(depth == 32){
+							if(!defaultTransparentVisualOffset){
+								defaultTransparentVisualOffset = current - visualStart;
+							}
+						}
 						inc current;
 						inc visualAllocated;
 					}
@@ -680,7 +700,7 @@ int main(const int argumentAmount, const char *const *argument){
 		bufferPixmap = xcb_generate_id(connection);
 		rootPicture = xcb_generate_id(connection);
 		bufferPicture = xcb_generate_id(connection);
-		rootFormat = findFormat((*screen).root_visual);
+		rootFormat = findFormat((*screen).root_visual, (*screen).root_depth);
 		xcb_create_pixmap(connection, (*screen).root_depth, bufferPixmap, (*screen).root, (*screen).width_in_pixels, (*screen).height_in_pixels);
 		xcb_render_create_picture(connection, bufferPicture, bufferPixmap, rootFormat, XCB_NONE, NULL);
 		xcb_render_create_picture(connection, rootPicture, overlayWindow, rootFormat, XCB_NONE, NULL);
@@ -712,7 +732,7 @@ int main(const int argumentAmount, const char *const *argument){
 			const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
 			uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
 			addExistingClientLoop:{
-				if(addClient(*windowCurrent, NULL)){
+				if(addClient(*windowCurrent)){
 					*orderedClientOffsetCurrent = orderedClientOffsetCurrent - orderedClientOffsetStart;
 					inc orderedClientOffsetCurrent;
 				}
@@ -852,7 +872,7 @@ int main(const int argumentAmount, const char *const *argument){
 		{
 			Client *const client = findClient((*event0).window);
 			if(!client){
-				if(addClient((*event0).window, event0)){
+				if(addClient((*event0).window)){
 					updateOrder();
 					calculateViewableWindowSizes();
 					drawWallpaper();
@@ -913,7 +933,7 @@ int main(const int argumentAmount, const char *const *argument){
 
 			if((*event0).parent == (*screen).root){
 				if(!client){
-					if(addClient((*event0).window, NULL)){
+					if(addClient((*event0).window)){
 						updateOrder();
 						calculateViewableWindowSizes();
 						drawWallpaper();
@@ -1475,25 +1495,20 @@ DRAWWALLPAPER(){
 	ret;
 }
 ADDCLIENT(){
-	hasOperation = true; fprintf(stdout, "--------------------adding client\n");
-	#define event /*-*/ ((xcb_create_notify_event_t *)event)
+	/*! hasOperation = true; fprintf(stdout, "--------------------adding client\n"); */
 	{
 		xcb_get_window_attributes_cookie_t attributesCookie;
 		xcb_get_geometry_cookie_t geometryCookie;
 		xcb_get_window_attributes_reply_t *attributesReply;
-		xcb_get_geometry_reply_t *geometryReply = NULL;
+		xcb_get_geometry_reply_t *geometryReply;
 		Client *client;
 		if(window == overlayWindow){
 			ret false;
 		}
 		attributesCookie = xcb_get_window_attributes_unchecked(connection, window);
-		if(!event){
-			geometryCookie = xcb_get_geometry_unchecked(connection, window);
-		}
+		geometryCookie = xcb_get_geometry_unchecked(connection, window);
 		attributesReply = xcb_wait_for_reply(connection, attributesCookie, NULL);
-		if(!event){
-			geometryReply = xcb_wait_for_reply(connection, geometryCookie, NULL);
-		}
+		geometryReply = xcb_wait_for_reply(connection, geometryCookie, NULL);
 
 
 
@@ -1511,7 +1526,7 @@ ADDCLIENT(){
 
 
 
-		if(!attributesReply or (!event and !geometryReply)){
+		if(!attributesReply or !geometryReply){
 			fprintf(stdout, "could not add client %x due to replies\n", window);
 			jmp emergencyExit;
 		}
@@ -1541,12 +1556,7 @@ ADDCLIENT(){
 
 
 
-		if(event){
-			(*client).x = (*event).x;
-			(*client).y = (*event).y;
-			(*client).w = (*event).width + 2 * (*event).border_width;
-			(*client).h = (*event).height + 2 * (*event).border_width;
-		}elif(geometryReply){
+		if(geometryReply){
 			(*client).x = (*geometryReply).x;
 			(*client).y = (*geometryReply).y;
 			(*client).w = (*geometryReply).width + 2 * (*geometryReply).border_width;
@@ -1563,7 +1573,7 @@ ADDCLIENT(){
 
 
 		(*client).window = window;
-		(*client).format = findFormat((*attributesReply).visual);
+		(*client).format = findFormat((*attributesReply).visual, (*geometryReply).depth);
 		(*client).damage = XCB_NONE;
 		(*client).picture = XCB_NONE;
 
@@ -1616,7 +1626,6 @@ ADDCLIENT(){
 			ret false;
 		}
 	}
-	#undef  event
 }
 UPDATEORDER(){
 	if(treeReply){
@@ -1747,6 +1756,10 @@ DRAWBELOWCLIENT(){
 
 
 
+	/*! can cause crashes. */
+
+
+
 	{
 		const uint *offsetCurrent = orderedClientOffsetStart;
 		const uint *const offsetWall = orderedClientOffsetStart + clientAllocated;
@@ -1755,6 +1768,16 @@ DRAWBELOWCLIENT(){
 		const uint eventW = (*client).w;
 		const uint eventH = (*client).h;
 		xcb_xfixes_region_t localRegion = XCB_NONE;
+
+
+
+
+
+
+
+
+
+		fprintf(stdout, "above\n");
 		jmp loop;
 		loop:{
 			if(offsetCurrent < offsetWall){
@@ -1784,6 +1807,16 @@ DRAWBELOWCLIENT(){
 				jmp loop;
 			}
 		}
+		fprintf(stdout, "below\n");
+
+
+
+
+
+
+
+
+
 		if(localRegion){
 			xcb_xfixes_set_picture_clip_region(connection, bufferPicture, localRegion, 0, 0);
 			xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, bufferPicture, XCB_NONE, rootPicture, eventX, eventY, 0, 0, eventX, eventY, eventW, eventH);
@@ -1918,7 +1951,10 @@ FINDFORMAT(){
 			inc current;
 			jmp findVisualLoop;
 		}
-		ret XCB_NONE;
+		if(depth == 32){
+			ret (*(visualStart + defaultTransparentVisualOffset)).format;
+		}
+		ret (*(visualStart + defaultOpaqueVisualOffset)).format;
 	}
 }
 QUERYTREE(){
