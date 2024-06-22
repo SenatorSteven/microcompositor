@@ -21,8 +21,10 @@
 	findClient() should be used only after a fastFindClient() is used.
 
 	fastFindClient() should hold the n, say 5, last seen windows.
+*/
 
-	maybe implement a mappedFindClient()
+/*!
+	implement a mappedFindClient()
 */
 
 /*!
@@ -30,45 +32,11 @@
 */
 
 /*!
-	keep non-input-output windows?
-*/
-
-/*!
-	store windows each client is intersecting with?
-*/
-
-/*!
-	something that is actively moving, namely the i3 bar between windows, will prevent drawing everything else
-*/
-
-/*!
 	some bug causes endless unrecognized errors with no more drawing on screen, at least for the window the bug happens on.
 */
 
 /*!
-	on creating a window and mapping it we get a flash on the monitor that shouldn't be there
-*/
-
-/*!
-	microsound has been observed to be completely black when the compositor is already running and then microsound is run
-
-	then again microsound has just been observed to be black
-*/
-
-/*!
-	some of the events received seem to be double the ones we expect. changing event mask on windows obtained fixes the event problem but introduces the unmapped-but-still-drawn visual artifact.
-*/
-
-/*!
-	steam username and notification button causing issues (misplaced window + it's often just white)
-*/
-
-/*!
 	weird artifacting when window is in nvidia monitor...? probably the fact multiple xcb_render_composite() calls are made to composite a single result.
-*/
-
-/*!
-	program can still crash
 */
 
 
@@ -308,8 +276,8 @@ SOFTWARE. */
 	uint visualAllocated;
 	xcb_render_pictvisual_t *visualStart;
 	xcb_render_pictvisual_t *visualWall;
-	uint defaultOpaqueVisualOffset;
-	uint defaultTransparentVisualOffset;
+	xcb_render_pictvisual_t *defaultOpaqueVisual;
+	xcb_render_pictvisual_t *defaultTransparentVisual;
 
 
 
@@ -317,6 +285,7 @@ SOFTWARE. */
 	uint clientAllocated;
 	Client *clientStart;
 	Client *clientWall;
+	Client *latestClient;
 
 
 
@@ -654,8 +623,8 @@ int main(const int argumentAmount, const char *const *argument){
 			fprintf(stdout, "no visualStart\n");
 			visualSize = 0;
 		}
-		defaultOpaqueVisualOffset = 0;
-		defaultTransparentVisualOffset = 0;
+		defaultOpaqueVisual = visualStart;
+		defaultTransparentVisual = visualStart;
 	}
 
 
@@ -666,6 +635,8 @@ int main(const int argumentAmount, const char *const *argument){
 		if(formats){
 			xcb_render_pictscreen_iterator_t pictscreenIterator = xcb_render_query_pict_formats_screens_iterator(formats);
 			xcb_render_pictvisual_t *current = visualStart;
+			uint defaultOpaqueVisualOffset = 0;
+			uint defaultTransparentVisualOffset = 0;
 			while(pictscreenIterator.rem){
 				xcb_render_pictdepth_iterator_t pictdepth = xcb_render_pictscreen_depths_iterator(pictscreenIterator.data);
 				while(pictdepth.rem){
@@ -697,6 +668,8 @@ int main(const int argumentAmount, const char *const *argument){
 				}
 				xcb_render_pictscreen_next(&pictscreenIterator);
 			}
+			defaultOpaqueVisual = visualStart + defaultOpaqueVisualOffset;
+			defaultTransparentVisual = visualStart + defaultTransparentVisualOffset;
 			free(formats);
 		}
 		jmp matchVisualFormatExit;
@@ -724,6 +697,7 @@ int main(const int argumentAmount, const char *const *argument){
 
 
 	{
+		latestClient = NULL;
 		queryTree();
 		if(treeReply){
 			const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
@@ -1379,6 +1353,10 @@ DRAWBELOWCLIENT(){
 
 
 
+	/*! doesn't work as intended when using the buffer. some mass is shown on screen, even though it's not suppoed to be in the region */
+
+
+
 	const uint *offsetCurrent = orderedClientOffsetStart - 1;
 	const uint *const offsetWall = orderedClientOffsetStart + clientAllocated;
 	const uint eventX = (*client).x;
@@ -1675,6 +1653,7 @@ UPDATEORDER(){
 
 
 		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
+		latestClient = NULL;
 		jmp findClientWindowLoop;
 		findClientWindowLoop:{
 			Client *const client = findClient(*windowCurrent);
@@ -1867,10 +1846,10 @@ SETWALLPAPER(){
 DRAWWALLPAPER(){
 	if(rootClient.allocated){
 		const xcb_xfixes_region_t region = xcb_generate_id(connection);
-		xcb_xfixes_create_region(connection, region, rootClient.allocated, rootClient.rectangle);
+		xcb_xfixes_create_region_checked(connection, region, rootClient.allocated, rootClient.rectangle);
 		{
-			xcb_xfixes_set_picture_clip_region(connection, wallpaperPicture, region, 0, 0);
-			xcb_render_composite(connection, XCB_RENDER_PICT_OP_SRC, wallpaperPicture, XCB_NONE, rootPicture, 0, 0, 0, 0, 0, 0, (*screen).width_in_pixels, (*screen).height_in_pixels);
+			xcb_xfixes_set_picture_clip_region_checked(connection, wallpaperPicture, region, 0, 0);
+			xcb_render_composite_checked(connection, XCB_RENDER_PICT_OP_SRC, wallpaperPicture, XCB_NONE, rootPicture, 0, 0, 0, 0, 0, 0, (*screen).width_in_pixels, (*screen).height_in_pixels);
 		}
 		xcb_xfixes_destroy_region_checked(connection, region);
 	}
@@ -1901,9 +1880,9 @@ FINDFORMAT(){
 			jmp findVisualLoop;
 		}
 		if(depth == 32){
-			ret (*(visualStart + defaultTransparentVisualOffset)).format;
+			ret (*defaultTransparentVisual).format;
 		}
-		ret (*(visualStart + defaultOpaqueVisualOffset)).format;
+		ret (*defaultOpaqueVisual).format;
 	}
 }
 QUERYTREE(){
@@ -1915,17 +1894,23 @@ QUERYTREE(){
 	ret;
 }
 FINDCLIENT(){
-	const uint8 *const firstWindow = (void *)&(*clientStart).window;
-	const uint8 *current = firstWindow;
-	jmp findClientLoop;
-	findClientLoop:{
-		if(*(xcb_window_t *)current == window){
-			ret (void *)(current - (firstWindow - (uint8 *)clientStart));
+	if(latestClient and (*latestClient).window == window){
+		ret latestClient;
+	}
+	{
+		const uint8 *const firstWindow = (void *)&(*clientStart).window;
+		const uint8 *current = firstWindow;
+		jmp findClientLoop;
+		findClientLoop:{
+			if(*(xcb_window_t *)current == window){
+				latestClient = (void *)(current - (firstWindow - (uint8 *)clientStart));
+				ret latestClient;
+			}
+			if((current += sizeof(Client)) < (uint8 *)clientWall){
+				jmp findClientLoop;
+			}
+			ret NULL;
 		}
-		if((current += sizeof(Client)) < (uint8 *)clientWall){
-			jmp findClientLoop;
-		}
-		ret NULL;
 	}
 }
 PRINTERROR(){
