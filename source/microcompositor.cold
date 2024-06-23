@@ -14,17 +14,9 @@
 */
 
 /*!
-	windows that move will leave a trail until the below window is updated.
-*/
-
-/*!
 	findClient() should be used only after a fastFindClient() is used.
 
 	fastFindClient() should hold the n, say 5, last seen windows.
-*/
-
-/*!
-	implement a mappedFindClient()
 */
 
 /*!
@@ -32,11 +24,11 @@
 */
 
 /*!
-	some bug causes endless unrecognized errors with no more drawing on screen, at least for the window the bug happens on.
+	weird artifacting when window is in nvidia monitor...? probably the fact multiple xcb_render_composite() calls are made to composite a single result.
 */
 
 /*!
-	weird artifacting when window is in nvidia monitor...? probably the fact multiple xcb_render_composite() calls are made to composite a single result.
+	when configuring, draw only the part of the below area that is needed. that should fix some overdrawing.
 */
 
 
@@ -145,10 +137,11 @@ SOFTWARE. */
 	#define _EMPTY_MACRO /*----------------------*/
 
 	#define FINDCLIENT() /*----------------------*/ local Client                  *findClient(const xcb_window_t window)
+	#define FINDMAPPEDCLIENT() /*----------------*/ local Client                  *findMappedClient(const xcb_window_t window)
 	#define UNMAPCLIENT() /*---------------------*/ local void                     unmapClient(Client *const client)
 	#define DRAWBELOWCLIENT() /*-----------------*/ local void                     drawBelowClient(const Client *const client)
 	#define MAPCLIENT() /*-----------------------*/ local void                     mapClient(Client *const client)
-	#define ADDCLIENT() /*-----------------------*/ local bool                     addClient(const xcb_window_t window)
+	#define ADDCLIENT() /*-----------------------*/ local void                     addClient(const xcb_window_t window)
 	#define CONFIGURECLIENT() /*-----------------*/ local void                     configureClient(Client *const client)
 	#define QUERYTREE() /*-----------------------*/ local void                     queryTree(void)
 	#define UPDATEORDER() /*---------------------*/ local void                     updateOrder(void)
@@ -283,9 +276,13 @@ SOFTWARE. */
 
 	uint clientSize;
 	uint clientAllocated;
+	uint orderedMappedClientAllocated;
 	Client *clientStart;
 	Client *clientWall;
 	Client *latestClient;
+	uint *orderedClientOffsetStart;
+	uint *orderedMappedClientOffsetStart;
+	uint *orderedMappedClientOffsetWall;
 
 
 
@@ -296,7 +293,6 @@ SOFTWARE. */
 
 
 
-	uint *orderedClientOffsetStart;
 	xcb_window_t overlayWindow;
 	xcb_rectangle_t *rectangleStart;
 	xcb_query_tree_reply_t *treeReply;
@@ -304,6 +300,7 @@ SOFTWARE. */
 
 /*!functions:{*/
 	FINDCLIENT();
+	FINDMAPPEDCLIENT();
 	UNMAPCLIENT();
 	DRAWBELOWCLIENT();
 	MAPCLIENT();
@@ -337,32 +334,33 @@ int main(const int argumentAmount, const char *const *argument){
 	(void)argumentAmount;
 	jmp setPrimaryGlobals;
 	setPrimaryGlobals:{
-		programName /*----------*/ = *argument;
-		errorPath /*------------*/ = NULL;
-		connectionName /*-------*/ = NULL;
-		mustOpenErrorStream /*--*/ = false;
-		errorStream /*----------*/ = DefaultErrorStream;
-		connection /*-----------*/ = NULL;
-		genericError /*---------*/ = NULL;
-		event0 /*---------------*/ = NULL;
-		quitMessage /*----------*/ = NULL;
-		treeReply /*------------*/ = NULL;
+		programName /*-----------*/ = *argument;
+		errorPath /*-------------*/ = NULL;
+		connectionName /*--------*/ = NULL;
+		mustOpenErrorStream /*---*/ = false;
+		errorStream /*-----------*/ = DefaultErrorStream;
+		connection /*------------*/ = NULL;
+		genericError /*----------*/ = NULL;
+		event0 /*----------------*/ = NULL;
+		quitMessage /*-----------*/ = NULL;
+		treeReply /*-------------*/ = NULL;
 
 
 
-		rootClient.rectangle /*-*/ = NULL;
-		rectangleStart /*-------*/ = NULL;
-		clientSize /*-----------*/ = CLIENT_BLOCK_SIZE;
-		clientAllocated /*------*/ = 0;
+		rootClient.rectangle /*--*/ = NULL;
+		rectangleStart /*--------*/ = NULL;
+		clientSize /*------------*/ = CLIENT_BLOCK_SIZE;
+		clientAllocated /*-------*/ = 0;
+		orderedMappedClientAllocated /*-*/ = 0;
 
-		bufferPixmap /*---------*/ = XCB_NONE;
-		rootPicture /*----------*/ = XCB_NONE;
-		bufferPicture /*--------*/ = XCB_NONE;
+		bufferPixmap /*----------*/ = XCB_NONE;
+		rootPicture /*-----------*/ = XCB_NONE;
+		bufferPicture /*---------*/ = XCB_NONE;
 
-		wallpaperPixmap /*------*/ = XCB_NONE;
-		wallpaperPicture /*-----*/ = XCB_NONE;
+		wallpaperPixmap /*-------*/ = XCB_NONE;
+		wallpaperPicture /*------*/ = XCB_NONE;
 
-		globalRegion /*---------*/ = XCB_NONE;
+		globalRegion /*----------*/ = XCB_NONE;
 
 
 
@@ -608,6 +606,10 @@ int main(const int argumentAmount, const char *const *argument){
 		if(!(orderedClientOffsetStart = malloc(clientSize * sizeof(uint)))){
 			fprintf(stdout, "no orderedClientOffsetStart\n");
 		}
+		if(!(orderedMappedClientOffsetStart = malloc(clientSize * sizeof(uint)))){
+			fprintf(stdout, "no orderedMappedClientOffsetStart\n");
+		}
+		orderedMappedClientOffsetWall = orderedMappedClientOffsetStart + orderedMappedClientAllocated;
 
 
 
@@ -702,18 +704,13 @@ int main(const int argumentAmount, const char *const *argument){
 		if(treeReply){
 			const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
 			const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
-			uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
 			addExistingClientLoop:{
-				if(addClient(*windowCurrent)){
-					*orderedClientOffsetCurrent = orderedClientOffsetCurrent - orderedClientOffsetStart;
-					inc orderedClientOffsetCurrent;
-				}
+				addClient(*windowCurrent);
 				if(inc windowCurrent < windowWall){
 					jmp addExistingClientLoop;
 				}
 			}
 		}
-		clientWall = clientStart + clientAllocated;
 		calculateViewableWindowSizes();
 		drawAllClients();
 		drawWallpaper();
@@ -992,6 +989,7 @@ int main(const int argumentAmount, const char *const *argument){
 		/*! update all this eventually */
 
 		free(visualStart);
+		free(orderedMappedClientOffsetStart);
 		free(orderedClientOffsetStart);
 		free(clientStart);
 
@@ -1028,25 +1026,39 @@ MAPCLIENT(){
 		(*client).picture = xcb_generate_id(connection);
 		xcb_render_create_picture_checked(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL); /*! annoying on discord tray window create, match error */
 	}
+
+
+
+	updateOrder(); /*! update order but do it only for the mapped windows pointer list */
+
+
+
 	calculateViewableWindowSizes();
 	drawClient(client);
 	ret;
 }
 UNMAPCLIENT(){
-	(*client).mapInfo &= ~MAPPED_MAP_INFO;
-	if((*client).picture){
-		xcb_render_free_picture_checked(connection, (*client).picture); /*! annoying on discord tray icon window delete */
-		(*client).picture = XCB_NONE;
+	if((*client).mapInfo & MAPPED_MAP_INFO){
+		(*client).mapInfo &= ~MAPPED_MAP_INFO;
+		if((*client).picture){
+			xcb_render_free_picture_checked(connection, (*client).picture); /*! annoying on discord tray icon window delete */
+			(*client).picture = XCB_NONE;
+		}
+
+
+
+		updateOrder(); /*! update order but do it only for the mapped windows pointer list */
+
+
+
+		calculateViewableWindowSizes();
+		drawBelowClient(client);
+		drawWallpaper();
 	}
-	calculateViewableWindowSizes();
-	drawBelowClient(client);
-	drawWallpaper();
 	ret;
 }
 DESTROYCLIENT(){
-	if((*client).mapInfo & MAPPED_MAP_INFO){
-		unmapClient(client);
-	}
+	unmapClient(client);
 	{
 		if((*client).damage){
 			xcb_damage_destroy_checked(connection, (*client).damage); /*! annoying on window deleting */
@@ -1151,16 +1163,12 @@ ADDCLIENT(){
 	xcb_get_geometry_reply_t *geometryReply;
 	Client *client;
 	if(window == overlayWindow){
-		ret false;
+		ret;
 	}
 	attributesCookie = xcb_get_window_attributes_unchecked(connection, window);
 	geometryCookie = xcb_get_geometry_unchecked(connection, window);
 	attributesReply = xcb_wait_for_reply(connection, attributesCookie, NULL);
 	geometryReply = xcb_wait_for_reply(connection, geometryCookie, NULL);
-
-
-
-	/*! error somewhere when reparenting the discord window */
 
 
 
@@ -1184,6 +1192,7 @@ ADDCLIENT(){
 	if(clientAllocated == clientSize){
 		void *temp;
 		void *temp1;
+		void *temp2;
 		clientSize += CLIENT_BLOCK_SIZE;
 		if(!(temp = realloc(clientStart, clientSize * sizeof(Client)))){
 			jmp emergencyExit;
@@ -1193,15 +1202,19 @@ ADDCLIENT(){
 			jmp emergencyExit;
 		}
 		orderedClientOffsetStart = temp1;
+		if(!(temp2 = realloc(orderedMappedClientOffsetStart, clientSize * sizeof(uint)))){
+			jmp emergencyExit;
+		}
+		orderedMappedClientOffsetStart = temp2;
 	}
-	client = clientStart + clientAllocated;
+	clientWall = clientStart + clientAllocated;
+	orderedMappedClientOffsetWall = orderedMappedClientOffsetStart + orderedMappedClientAllocated;
+
+	client = clientWall;
 	*(orderedClientOffsetStart + clientAllocated) = client - clientStart;
 
-
-
-
-
-
+	inc clientAllocated;
+	inc clientWall;
 
 
 
@@ -1231,6 +1244,9 @@ ADDCLIENT(){
 	(*client).mapInfo = NONE_MAP_INFO;
 	if((*attributesReply).map_state != XCB_MAP_STATE_UNMAPPED){
 		(*client).mapInfo |= MAPPED_MAP_INFO;
+		*orderedMappedClientOffsetWall = client - clientStart;
+		inc orderedMappedClientAllocated;
+		inc orderedMappedClientOffsetWall;
 	}
 	if(!((*client).rightX < 1 or (*client).x >= (*screen).width_in_pixels or (*client).bottomY < 1 or (*client).y >= (*screen).height_in_pixels)){
 		(*client).mapInfo |= VIEWABLE_MAP_INFO;
@@ -1263,21 +1279,11 @@ ADDCLIENT(){
 
 
 
-	free(attributesReply);
-	free(geometryReply);
-
-
-
-	inc clientAllocated;
-	inc clientWall;
-	ret true;
-
-
-
+	jmp emergencyExit;
 	emergencyExit:{
 		free(attributesReply);
 		free(geometryReply);
-		ret false;
+		ret;
 	}
 }
 CONFIGURECLIENT(){
@@ -1357,8 +1363,8 @@ DRAWBELOWCLIENT(){
 
 
 
-	const uint *offsetCurrent = orderedClientOffsetStart - 1;
-	const uint *const offsetWall = orderedClientOffsetStart + clientAllocated;
+	const uint *offsetCurrent = orderedMappedClientOffsetStart;
+	const uint *const offsetWall = orderedMappedClientOffsetStart + orderedMappedClientAllocated;
 	const uint eventX = (*client).x;
 	const uint eventY = (*client).y;
 	const uint eventW = (*client).w;
@@ -1366,13 +1372,14 @@ DRAWBELOWCLIENT(){
 	xcb_xfixes_region_t localRegion = XCB_NONE;
 	jmp loop;
 	loop:{
-		if(inc offsetCurrent < offsetWall){
+		if(offsetCurrent < offsetWall){
 			const Client *const current = clientStart + *offsetCurrent;
 			int x;
 			int y;
 			int w;
 			int h;
 			if(*offsetCurrent == (uint)-1 or ((*current).mapInfo & (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)) != (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO) or current == client){
+				inc offsetCurrent;
 				jmp loop;
 			}
 			if(createIntersectingRectangle((*current).x, (*current).y, (*current).w, (*current).h, eventX, eventY, eventW, eventH, &x, &y, &w, &h)){
@@ -1397,6 +1404,7 @@ DRAWBELOWCLIENT(){
 				}
 */
 			}
+			inc offsetCurrent;
 			jmp loop;
 		}
 	}
@@ -1485,6 +1493,8 @@ CALCULATEVIEWABLEWINDOWSIZES(){
 
 
 
+	const uint *belowCurrent = orderedMappedClientOffsetStart;
+	bool useRoot = true;
 	{
 		rootClient.x = 0;
 		rootClient.y = 0;
@@ -1506,97 +1516,92 @@ CALCULATEVIEWABLEWINDOWSIZES(){
 			}
 		}
 	}
-	{
-		const uint *belowCurrent = orderedClientOffsetStart - 1;
-		const uint *const offsetWall = orderedClientOffsetStart + clientAllocated;
-		bool useRoot = true;
-		jmp resetClientRectangle;
-		resetClientRectangle:{
-			Client *client = clientStart;
-			jmp resetClientRectangleLoop;
-			resetClientRectangleLoop:{
-				if(client < clientWall){
-					xcb_rectangle_t *rectangle = (*client).rectangle;
-					if(rectangle){
-						(*rectangle).x = (*client).x;
-						(*rectangle).y = (*client).y;
-						(*rectangle).width = (*client).w;
-						(*rectangle).height = (*client).h;
-						(*client).allocated = 1;
-					}
-					inc client;
-					jmp resetClientRectangleLoop;
+	jmp resetClientRectangle;
+	resetClientRectangle:{
+		Client *client = clientStart;
+		jmp resetClientRectangleLoop;
+		resetClientRectangleLoop:{
+			if(client < clientWall){
+				xcb_rectangle_t *rectangle = (*client).rectangle;
+				if(rectangle){
+					(*rectangle).x = (*client).x;
+					(*rectangle).y = (*client).y;
+					(*rectangle).width = (*client).w;
+					(*rectangle).height = (*client).h;
+					(*client).allocated = 1;
 				}
+				inc client;
+				jmp resetClientRectangleLoop;
 			}
-			jmp belowClientLoop;
 		}
-		belowClientLoop:{
-			if(inc belowCurrent < offsetWall){
-				const uint *aboveCurrent = belowCurrent;
-				Client *below;
-				if(useRoot){
-					below = &rootClient;
-					dec belowCurrent;
-					useRoot = false;
-				}else{
-					below = clientStart + *belowCurrent;
-					if(*belowCurrent == (uint)-1 or ((*below).mapInfo & (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)) != (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)){
-						jmp belowClientLoop;
-					}
+		jmp belowClientLoop;
+	}
+	belowClientLoop:{
+		if(belowCurrent < orderedMappedClientOffsetWall){
+			const uint *aboveCurrent = belowCurrent + 1;
+			Client *below;
+			if(useRoot){
+				below = &rootClient;
+				dec belowCurrent;
+				useRoot = false;
+			}else{
+				below = clientStart + *belowCurrent;
+				if(*belowCurrent == (uint)-1 or ((*below).mapInfo & (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)) != (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)){
+					inc belowCurrent;
+					jmp belowClientLoop;
 				}
-				jmp aboveClientLoop;
-				aboveClientLoop:{
-					if(inc aboveCurrent < offsetWall){
-						Client *const above = clientStart + *aboveCurrent;
-						int x;
-						int y;
-						int w;
-						int h;
-						if(*aboveCurrent == (uint)-1 or ((*above).mapInfo & (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)) != (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)){
-							jmp aboveClientLoop;
-						}
-						if(createIntersectingRectangle((*above).x, (*above).y, (*above).w, (*above).h, (*below).x, (*below).y, (*below).w, (*below).h, &x, &y, &w, &h)){
-							xcb_rectangle_t *rectangle = (*below).rectangle;
-							if(rectangle){
-								xcb_rectangle_t *rectangleWall = rectangle + (*below).allocated;
-								uint size = RECTANGLE_BLOCK_SIZE;
-								uint allocated = 0;
-								xcb_rectangle_t *newRectangle = malloc(size * sizeof(xcb_rectangle_t));
-								if(!newRectangle){
-									ret;
-								}
-								jmp splitRectanglesLoop;
-								splitRectanglesLoop:{
-									if(rectangle < rectangleWall){
-										if(createIntersectingRectangle((*rectangle).x, (*rectangle).y, (*rectangle).width, (*rectangle).height, (*above).x, (*above).y, (*above).w, (*above).h, &x, &y, &w, &h)){
-											splitRectangle((*rectangle).x, (*rectangle).y, (*rectangle).width, (*rectangle).height, x, y, w, h, &size, &allocated, &newRectangle);
-										}else{
-											if(allocated == size){
-												void *temp;
-												size += RECTANGLE_BLOCK_SIZE;
-												if(!(temp = realloc(newRectangle, size * sizeof(xcb_rectangle_t)))){
-													ret;
-												}
-												newRectangle = temp;
-											}
-											*(newRectangle + allocated) = *rectangle;
-											inc allocated;
-										}
-										inc rectangle;
-										jmp splitRectanglesLoop;
-									}
-								}
-								free((*below).rectangle);
-								(*below).size = size;
-								(*below).allocated = allocated;
-								(*below).rectangle = newRectangle;
-							}
-						}
-						jmp aboveClientLoop;
-					}
-				}
-				jmp belowClientLoop;
 			}
+			jmp aboveClientLoop;
+			aboveClientLoop:{
+				if(aboveCurrent < orderedMappedClientOffsetWall){
+					Client *const above = clientStart + *aboveCurrent;
+					int x;
+					int y;
+					int w;
+					int h;
+					if(*aboveCurrent != (uint)-1 and ((*above).mapInfo & (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)) == (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO) and createIntersectingRectangle((*above).x, (*above).y, (*above).w, (*above).h, (*below).x, (*below).y, (*below).w, (*below).h, &x, &y, &w, &h)){
+						xcb_rectangle_t *rectangle = (*below).rectangle;
+						if(rectangle){
+							xcb_rectangle_t *rectangleWall = rectangle + (*below).allocated;
+							uint size = RECTANGLE_BLOCK_SIZE;
+							uint allocated = 0;
+							xcb_rectangle_t *newRectangle = malloc(size * sizeof(xcb_rectangle_t));
+							if(!newRectangle){
+								ret;
+							}
+							jmp splitRectanglesLoop;
+							splitRectanglesLoop:{
+								if(rectangle < rectangleWall){
+									if(createIntersectingRectangle((*rectangle).x, (*rectangle).y, (*rectangle).width, (*rectangle).height, (*above).x, (*above).y, (*above).w, (*above).h, &x, &y, &w, &h)){
+										splitRectangle((*rectangle).x, (*rectangle).y, (*rectangle).width, (*rectangle).height, x, y, w, h, &size, &allocated, &newRectangle);
+									}else{
+										if(allocated == size){
+											void *temp;
+											size += RECTANGLE_BLOCK_SIZE;
+											if(!(temp = realloc(newRectangle, size * sizeof(xcb_rectangle_t)))){
+												ret;
+											}
+											newRectangle = temp;
+										}
+										*(newRectangle + allocated) = *rectangle;
+										inc allocated;
+									}
+									inc rectangle;
+									jmp splitRectanglesLoop;
+								}
+							}
+							free((*below).rectangle);
+							(*below).size = size;
+							(*below).allocated = allocated;
+							(*below).rectangle = newRectangle;
+						}
+					}
+					inc aboveCurrent;
+					jmp aboveClientLoop;
+				}
+			}
+			inc belowCurrent;
+			jmp belowClientLoop;
 		}
 	}
 
@@ -1609,21 +1614,18 @@ CALCULATEVIEWABLEWINDOWSIZES(){
 
 
 	/*! {
-		uint *current = orderedClientOffsetStart;
-		uint *wall = orderedClientOffsetStart + clientAllocated;
+		uint *current = orderedMappedClientOffsetStart;
 		uint i = 0;
-		while(current < wall){
-			if(*current != (uint)-1){
-				Client *client = clientStart + *current;
-				if(((*client).mapInfo & (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)) == (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)){
-					xcb_rectangle_t *rectangle = (*client).rectangle;
-					xcb_rectangle_t *wall = (*client).rectangle + (*client).allocated;
-					fprintf(stdout, "\tclient %u:\n", i);
-					inc i;
-					while(rectangle < wall){
-						fprintf(stdout, "\t\t%i %i %i %i\n", (*rectangle).x, (*rectangle).y, (*rectangle).width, (*rectangle).height);
-						inc rectangle;
-					}
+		while(current < orderedMappedClientOffsetWall){
+			Client *client = clientStart + *current;
+			if((*client).mapInfo & VIEWABLE_MAP_INFO){
+				xcb_rectangle_t *rectangle = (*client).rectangle;
+				xcb_rectangle_t *wall = (*client).rectangle + (*client).allocated;
+				fprintf(stdout, "\tclient %u:\n", i);
+				inc i;
+				while(rectangle < wall){
+					fprintf(stdout, "\t\t%i %i %i %i\n", (*rectangle).x, (*rectangle).y, (*rectangle).width, (*rectangle).height);
+					inc rectangle;
 				}
 			}
 			inc current;
@@ -1639,26 +1641,52 @@ UPDATEORDER(){
 	if(treeReply){
 		const xcb_window_t *windowCurrent = xcb_query_tree_children(treeReply);
 		const xcb_window_t *const windowWall = windowCurrent + xcb_query_tree_children_length(treeReply);
-
-
-
-
-
-
-
-
-
-		/*! optimize this */
-
-
-
+		const uint8 *const firstClientStartWindow = (void *)&(*clientStart).window;
+		Client *startingClient = clientStart;
 		uint *orderedClientOffsetCurrent = orderedClientOffsetStart;
+		uint *orderedMappedClientOffsetCurrent = orderedMappedClientOffsetStart;
 		latestClient = NULL;
+
+
+
+
+
+
+
+
+
 		jmp findClientWindowLoop;
 		findClientWindowLoop:{
-			Client *const client = findClient(*windowCurrent);
+			const xcb_window_t window = *windowCurrent;
+			Client *client;
+			{
+				const uint8 *const firstWindow = (void *)&(*startingClient).window;
+				const uint8 *current = firstWindow;
+				jmp findClientLoop;
+				findClientLoop:{
+					if(*(xcb_window_t *)current == window){
+						client = (void *)(current - (firstClientStartWindow - (uint8 *)clientStart));
+						if(client == startingClient){
+							inc startingClient;
+						}
+						jmp quitLooking;
+					}
+					if((current += sizeof(Client)) < (uint8 *)clientWall){
+						jmp findClientLoop;
+					}
+					client = NULL;
+				}
+			}
+			quitLooking:{}
+
+
+
 			if(client){
 				*orderedClientOffsetCurrent = client - clientStart;
+				if((*client).mapInfo & MAPPED_MAP_INFO){
+					*orderedMappedClientOffsetCurrent = client - clientStart;
+					inc orderedMappedClientOffsetCurrent;
+				}
 			}else{
 				*orderedClientOffsetCurrent = -1;
 				if(*windowCurrent == overlayWindow){
@@ -1687,38 +1715,44 @@ UPDATEORDER(){
 
 
 
+		orderedMappedClientAllocated = orderedMappedClientOffsetCurrent - orderedMappedClientOffsetStart;
+		orderedMappedClientOffsetWall = orderedMappedClientOffsetCurrent;
 	}
 	ret;
 }
 GETCLIENTINTERSECTINGRECTANGLES(){
-	if(!rectangleStart){
-		ret 0;
-	}
+	const xcb_rectangle_t *rectangle;
+	const xcb_rectangle_t *wall;
+	xcb_rectangle_t *rectangleCurrent;
 	{
-		const xcb_rectangle_t *rectangle = (*client).rectangle;
-		const xcb_rectangle_t *const wall = rectangle + (*client).allocated;
-		xcb_rectangle_t *rectangleCurrent = rectangleStart;
-		jmp createIntersectingRectangleLoop;
-		createIntersectingRectangleLoop:{
-			if(rectangle < wall){
-				const int leftX1 = (*rectangle).x;
-				const int topY1 = (*rectangle).y;
-				const int rightX1 = leftX1 + (*rectangle).width;
-				const int bottomY1 = topY1 + (*rectangle).height;
-				if(leftX0 < rightX1 and rightX0 > leftX1 and topY0 < bottomY1 and bottomY0 > topY1){
-					(*rectangleCurrent).x      =    leftX1 >   leftX0?   leftX1 :   leftX0;
-					(*rectangleCurrent).y      =     topY1 >    topY0?    topY1 :    topY0;
-					(*rectangleCurrent).width  = ( rightX1 <  rightX0?  rightX1 :  rightX0) - (*rectangleCurrent).x;
-					(*rectangleCurrent).height = (bottomY1 < bottomY0? bottomY1 : bottomY0) - (*rectangleCurrent).y;
-					inc rectangleCurrent;
-				}
-				inc rectangle;
-				jmp createIntersectingRectangleLoop;
-			}
-			ret rectangleCurrent - rectangleStart;
+		if(!rectangleStart){
+			ret 0;
 		}
+		rectangle = (*client).rectangle;
+		wall = rectangle + (*client).allocated;
+		rectangleCurrent = rectangleStart;
+		jmp createIntersectingRectangleLoop;
+	}
+	createIntersectingRectangleLoop:{
+		if(rectangle < wall){
+			const int leftX1 = (*rectangle).x;
+			const int topY1 = (*rectangle).y;
+			const int rightX1 = leftX1 + (*rectangle).width;
+			const int bottomY1 = topY1 + (*rectangle).height;
+			if(leftX0 < rightX1 and rightX0 > leftX1 and topY0 < bottomY1 and bottomY0 > topY1){
+				(*rectangleCurrent).x      =    leftX1 >   leftX0?   leftX1 :   leftX0;
+				(*rectangleCurrent).y      =     topY1 >    topY0?    topY1 :    topY0;
+				(*rectangleCurrent).width  = ( rightX1 <  rightX0?  rightX1 :  rightX0) - (*rectangleCurrent).x;
+				(*rectangleCurrent).height = (bottomY1 < bottomY0? bottomY1 : bottomY0) - (*rectangleCurrent).y;
+				inc rectangleCurrent;
+			}
+			inc rectangle;
+			jmp createIntersectingRectangleLoop;
+		}
+		ret rectangleCurrent - rectangleStart;
 	}
 }
+
 
 
 
@@ -1747,13 +1781,12 @@ GETCLIENTINTERSECTINGRECTANGLES(){
 
 
 DRAWALLCLIENTS(){
-	const uint *offsetCurrent = orderedClientOffsetStart - 1;
-	const uint *const offsetWall = orderedClientOffsetStart + clientAllocated;
+	const uint *offsetCurrent = orderedMappedClientOffsetStart;
 	jmp drawClientLoop;
 	drawClientLoop:{
-		if(inc offsetCurrent < offsetWall){
+		if(offsetCurrent < orderedMappedClientOffsetWall){
 			const Client *const current = clientStart + *offsetCurrent;
-			if(*offsetCurrent != (uint)-1 and ((*current).mapInfo & (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)) == (MAPPED_MAP_INFO | VIEWABLE_MAP_INFO)){
+			if((*current).mapInfo & VIEWABLE_MAP_INFO){
 				const xcb_xfixes_region_t region = xcb_generate_id(connection);
 				xcb_rectangle_t rectangle;
 				rectangle.x = (*current).x;
@@ -1767,6 +1800,7 @@ DRAWALLCLIENTS(){
 				}
 				xcb_xfixes_destroy_region_checked(connection, region);
 			}
+			inc offsetCurrent;
 			jmp drawClientLoop;
 		}
 	}
@@ -1894,23 +1928,43 @@ QUERYTREE(){
 	ret;
 }
 FINDCLIENT(){
+	const uint8 *firstWindow;
+	const uint8 *current;
 	if(latestClient and (*latestClient).window == window){
 		ret latestClient;
 	}
-	{
-		const uint8 *const firstWindow = (void *)&(*clientStart).window;
-		const uint8 *current = firstWindow;
-		jmp findClientLoop;
-		findClientLoop:{
-			if(*(xcb_window_t *)current == window){
-				latestClient = (void *)(current - (firstWindow - (uint8 *)clientStart));
+	firstWindow = (void *)&(*clientStart).window;
+	current = firstWindow;
+	jmp findClientLoop;
+	findClientLoop:{
+		if(*(xcb_window_t *)current == window){
+			latestClient = (void *)(current - (firstWindow - (uint8 *)clientStart));
+			ret latestClient;
+		}
+		if((current += sizeof(Client)) < (uint8 *)clientWall){
+			jmp findClientLoop;
+		}
+		ret NULL;
+	}
+}
+FINDMAPPEDCLIENT(){
+	const uint *offsetCurrent;
+	if(latestClient and (*latestClient).window == window and (*latestClient).mapInfo & MAPPED_MAP_INFO){
+		ret latestClient;
+	}
+	offsetCurrent = orderedMappedClientOffsetStart;
+	jmp findMappedClientLoop;
+	findMappedClientLoop:{
+		if(offsetCurrent < orderedMappedClientOffsetWall){
+			Client *const current = clientStart + *offsetCurrent;
+			if((*current).window == window){
+				latestClient = current;
 				ret latestClient;
 			}
-			if((current += sizeof(Client)) < (uint8 *)clientWall){
-				jmp findClientLoop;
-			}
-			ret NULL;
+			inc offsetCurrent;
+			jmp findMappedClientLoop;
 		}
+		ret NULL;
 	}
 }
 PRINTERROR(){
