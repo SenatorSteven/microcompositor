@@ -24,10 +24,10 @@
 
 #!/bin/bash
 
-DEBUG=false
+DEBUG=true
 
 name="microcompositor"
-libraries="-lxcb -lxcb-composite -lxcb-damage -lxcb-randr -lxcb-render -lxcb-xfixes"
+libraries="-lxcb -lxcb-composite -lxcb-damage -lxcb-randr -lxcb-render -lxcb-xfixes -lxcb-shape"
 files=""
 
 compileFile(){
@@ -50,4 +50,3 @@ gcc $files $libraries -o output/$name
 printf "#!/bin/bash\n\ncd \$(dirname \$0)\n[ ! -f $name ] && cd \$(cd \$(dirname \$BASH_SOURCE) && pwd) || :\n./$name \"\$@\"\nexit 0\n" > output/run
 chmod +x output/run
 exit 0
-
