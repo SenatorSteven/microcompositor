@@ -949,6 +949,10 @@ int main(const int argumentAmount, const char *const *argument){
 	}
 	randrNotifyEvent:{
 		fprintf(stdout, "%s: randr notify event\n", programName);
+		(*clientStart).w = (*screen).width_in_pixels;
+		(*clientStart).h = (*screen).height_in_pixels;
+		(*clientStart).rightX = (*clientStart).x + (*clientStart).w;
+		(*clientStart).bottomY = (*clientStart).y + (*clientStart).h;
 		calculateViewableWindowSizes();
 		createRootPicture();
 		createWallpaper();
