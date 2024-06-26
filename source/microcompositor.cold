@@ -1749,6 +1749,7 @@ CREATEWALLPAPER(){
 	wallpaperPicture = xcb_generate_id(connection);
 	xcb_create_pixmap(connection, (*screen).root_depth, wallpaperPixmap, (*screen).root, (*screen).width_in_pixels, (*screen).height_in_pixels);
 	xcb_render_create_picture(connection, wallpaperPicture, wallpaperPixmap, rootFormat, XCB_NONE, NULL);
+	(*clientStart).picture = wallpaperPicture;
 	ret;
 }
 SETWALLPAPER(){
