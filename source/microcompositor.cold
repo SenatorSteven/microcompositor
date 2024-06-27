@@ -21,12 +21,6 @@
 */
 
 /*!
-	wallpaper is drawn every time something is updated, even though most of the time the wallpaper is already drawn. fix that, somehow.
-
-	maybe treat the wallpaper as a window below all the other ones and therefore draw the wallpaper before the other windows on drawBelowClient()
-*/
-
-/*!
 	continue looking for all kinds of possible optimizations
 */
 
