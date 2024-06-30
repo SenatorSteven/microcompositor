@@ -22,6 +22,10 @@
 	update memory management on program close
 */
 
+/*!
+	some windows, like vivaldi's tabs and gedit's copied snippets are transparent but we don't catch that at all, seemingly anyway. find out why.
+*/
+
 
 
 
