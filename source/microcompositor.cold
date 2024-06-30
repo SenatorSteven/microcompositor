@@ -9,6 +9,12 @@
 */
 
 /*!
+	we could detect how many rectangles in the screen (suppose 1080p and 720p monitors) and draw using that knowledge
+
+	complete ignore it, for now anyway.
+*/
+
+/*!
 	rectangle splitting can create rectangles that can be combined into one.
 
 	completely ignore it.
@@ -23,7 +29,17 @@
 */
 
 /*!
-	some windows, like vivaldi's tabs and gedit's copied snippets are transparent but we don't catch that at all, seemingly anyway. find out why.
+	some windows, like vivaldi's tabs and gedit's copied snippets are transparent but we don't act as such. find out why.
+
+	we know about their transparency, in the case of gedit's window anyway, but we're not compositing it for whatever reason.
+	surely we must be setting up the order and viewable areas correctly, right?
+
+	may instead just be a configureClient() issue, would not be surprised at all.
+	turns out it probably wasn't. microsound works properly.
+*/
+
+/*!
+	the program has somehow managed to crash. it's okay, the memory management is a mess anyway.
 */
 
 
@@ -300,29 +316,38 @@ SOFTWARE. */
 /*!}*/
 
 /*!functions:{*/
+	QUERYTREE();
+	UPDATEORDER();
+	CALCULATEVIEWABLEWINDOWSIZES();
+	GETINTERSECTINGRECTANGLE();
+
+	MAPCLIENT();
+	UNMAPCLIENT();
+	CREATECLIENT();
+	DESTROYCLIENT();
+	CREATECLIENT();
+	DESTROYCLIENT();
+	CONFIGURECLIENT();
+	CIRCULATECLIENTS();
+	DAMAGECLIENT();
+	SHAPECLIENT();
+
+	COPYABOVEBELOWCLIENTS();
+
 	FINDFORMAT();
 	FINDCLIENT();
 	FINDMAPPEDCLIENT();
+
 	DRAWCOMPOSITECLIENT();
 	DRAWCOMPOSITEABOVEBELOWCLIENT();
 	DRAWALLCLIENTS();
-	QUERYTREE();
-	UPDATEORDER();
-	GETINTERSECTINGRECTANGLE();
-	CALCULATEVIEWABLEWINDOWSIZES();
+	GETCLIENTINTERSECTINGRECTANGLES();
+
 	SETWALLPAPER();
 	CREATEWALLPAPER();
-	CREATECLIENT();
-	DESTROYCLIENT();
-	MAPCLIENT();
-	UNMAPCLIENT();
-	CONFIGURECLIENT();
-	DAMAGECLIENT();
-	SHAPECLIENT();
-	GETCLIENTINTERSECTINGRECTANGLES();
-	CIRCULATECLIENTS();
 	CREATEROOTPICTURE();
-	COPYABOVEBELOWCLIENTS();
+
+
 
 	PRINTERROR();
 	OPENERRORSTREAM();
@@ -765,6 +790,7 @@ int main(const int argumentAmount, const char *const *argument){
 	}
 
 
+
 	{
 		xcb_ungrab_server(connection);
 	}
@@ -992,7 +1018,13 @@ int main(const int argumentAmount, const char *const *argument){
 		#undef  event0
 	}
 	randrNotifyEvent:{
-		fprintf(stdout, "%s: randr notify event\n", programName);
+
+
+
+		/*! this will need to be changed when the proper monitor handling comes in */
+
+
+
 		(*clientStart).w = (*screen).width_in_pixels;
 		(*clientStart).h = (*screen).height_in_pixels;
 		(*clientStart).rightX = (*clientStart).x + (*clientStart).w;
@@ -1287,14 +1319,16 @@ DESTROYCLIENT(){
 	ret;
 }
 MAPCLIENT(){
-	(*client).mapInfo |= MAPPED_MAP_INFO;
-	if(!(*client).picture){
-		(*client).picture = xcb_generate_id(connection);
-		xcb_render_create_picture_checked(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL); /*! annoying on discord tray window create, match error */
+	if(!((*client).mapInfo & MAPPED_MAP_INFO)){ /*! remove later? */
+		(*client).mapInfo |= MAPPED_MAP_INFO;
+		if(!(*client).picture){
+			(*client).picture = xcb_generate_id(connection);
+			xcb_render_create_picture_checked(connection, (*client).picture, (*client).window, (*client).format, XCB_NONE, NULL); /*! annoying on discord tray window create, match error */
+		}
+		updateOrder();
+		calculateViewableWindowSizes();
+		drawCompositeClient(client, (*client).pictureOperation != XCB_RENDER_PICT_OP_SRC, true, true, (*client).x, (*client).y, (*client).w, (*client).h);
 	}
-	updateOrder();
-	calculateViewableWindowSizes();
-	drawCompositeClient(client, (*client).pictureOperation != XCB_RENDER_PICT_OP_SRC, true, true, (*client).x, (*client).y, (*client).w, (*client).h);
 	ret;
 }
 UNMAPCLIENT(){
