@@ -32,7 +32,7 @@ false=0;
 function main(){
 	[ $true        ] && { local name="microcompositor";                                                                                     } || :;
 	[ $true        ] && { local folder="/tmp/$name";                                                                                        } || :;
-	[ $true        ] && { local libraries="-lxcb -lxcb-composite -lxcb-damage -lxcb-randr -lxcb-render -lxcb-xfixes -lxcb-shape"; return 0; } || :;
+	[ $true        ] && { local libraries="-lxcb -lxcb-composite -lxcb-damage -lxcb-randr -lxcb-render -lxcb-xfixes -lxcb-shape";           } || :;
 	[ $true        ] && { local parameters=();                                                                                              } || :;
 	[ $true        ] && { cd "${BASH_SOURCE%/*}";                                                                                           } || :;
 	[ ! -f "$NAME" ] && { printf "$NAME: could not find $NAME directory\n" 1>&2;                                                  return 1; } || :;
